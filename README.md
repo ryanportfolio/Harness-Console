@@ -17,13 +17,13 @@ Open http://127.0.0.1:4545. The page refreshes itself every 30 seconds; "Refresh
 `accounts.json` lists one entry per account:
 
 ```json
-{ "name": "Claude 2", "kind": "claude", "dir": "C:/Users/Home/.claude-2" }
+{ "name": "Claude 2", "kind": "claude", "dir": "~/.claude-2" }
 ```
 
 - `kind: "claude"` reads `<dir>/.credentials.json`, the file Claude Code writes on login.
 - `kind: "codex"` reads `<dir>/auth.json`, the file Codex writes on login.
 
-Each account needs its own directory. The first account of each kind uses the default directory (`~/.claude`, `~/.codex`). Log the second account into a separate directory once:
+Each account needs its own directory. `~` expands to the current user's home directory. The first account of each kind uses the default directory (`~/.claude`, `~/.codex`). Log the second account into a separate directory once:
 
 ```bash
 $env:CLAUDE_CONFIG_DIR = "C:\Users\Home\.claude-2"; claude login

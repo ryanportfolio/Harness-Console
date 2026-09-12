@@ -15,6 +15,16 @@ const execP = promisify(exec);
 
 const config = JSON.parse(await readFile(path.join(here, "accounts.json"), "utf8"));
 const PORT = config.port ?? 4545;
+const HOME = process.env.USERPROFILE ?? process.env.HOME ?? "";
+for (const a of config.accounts) a.dir = path.resolve(a.dir.replace(/^~(?=[\\/]|$)/, HOME));
+{
+  const seen = new Set();
+  for (const a of config.accounts) {
+    const key = a.name.replace(/[^\w.-]+/g, "_");
+    if (seen.has(key)) throw new Error(`accounts.json: account name '${a.name}' collides with another entry after sanitizing; names must be unique`);
+    seen.add(key);
+  }
+}
 const STATE_DIR = path.join(here, ".state");
 await mkdir(STATE_DIR, { recursive: true });
 
@@ -43,7 +53,9 @@ function jwtPayload(token) {
 
 async function writeAtomic(file, content) {
   const tmp = `${file}.usage-dash-tmp.${process.pid}.${Date.now()}`;
-  await writeFile(tmp, content, "utf8");
+  let mode;
+  try { mode = (await stat(file)).mode & 0o777; } catch { /* new file */ }
+  await writeFile(tmp, content, { encoding: "utf8", mode: mode ?? 0o600 });
   await rename(tmp, file);
 }
 
@@ -86,6 +98,7 @@ function claudeExpired(o) {
 
 async function claudeRefresh(acct, creds) {
   const { o, file, root } = creds;
+  const originalAccess = o.accessToken;
   if (!o.refreshToken) throw new Error("token expired and no refreshToken; run `claude` to log in");
   const body = { grant_type: "refresh_token", refresh_token: o.refreshToken, client_id: CLAUDE_CLIENT_ID };
   if (Array.isArray(o.scopes) && o.scopes.length) body.scope = o.scopes.join(" ");
@@ -106,6 +119,14 @@ async function claudeRefresh(acct, creds) {
   if (j.refresh_token) o.refreshToken = j.refresh_token;
   o.expiresAt = Date.now() + (j.expires_in ?? 3600) * 1000;
   if (j.scope) o.scopes = j.scope.split(" ");
+  // Re-read before writing: if the CLI logged in, switched account, or refreshed meanwhile, keep its version.
+  let latest;
+  try { latest = JSON.parse(await readFile(file, "utf8")); } catch { latest = null; }
+  const cur = latest?.claudeAiOauth;
+  if (cur && (cur.refreshToken !== body.refresh_token || cur.accessToken !== originalAccess)) {
+    log(`[${acct.name}] credentials changed on disk during refresh; using the CLI's version`);
+    return { file, root: latest, o: cur };
+  }
   root.claudeAiOauth = o;
   await writeAtomic(file, JSON.stringify(root, null, 2)); // CLI reads this file fresh; same write the CLI does
   log(`[${acct.name}] refreshed Claude OAuth token`);
@@ -214,6 +235,7 @@ function codexWindow(w, label) {
 }
 
 async function codexFetch(acct, state) {
+  if (state.backoffUntil && Date.now() < state.backoffUntil) throw new Error(state.backoffReason);
   const c = await codexReadCreds(acct.dir);
   const warnings = [];
   if (c.expiresAt != null) {
@@ -225,7 +247,12 @@ async function codexFetch(acct, state) {
 
   const r = await fetchJson(`${CODEX_BASE_URL}/wham/usage`, { headers });
   if (r.status === 401) throw new Error("usage API 401: token invalid; run `codex login` for this CODEX_HOME");
-  if (r.status === 429) throw new Error(`rate limited by usage API (retry-after ${Math.round(retryAfterMs(r.headers, 60000) / 1000)}s)`);
+  if (r.status === 429) {
+    const ms = retryAfterMs(r.headers, 5 * 60 * 1000);
+    state.backoffUntil = Date.now() + ms;
+    state.backoffReason = `rate limited by usage API; retrying in ${Math.round(ms / 1000)}s`;
+    throw new Error(state.backoffReason);
+  }
   if (!r.ok) throw new Error(`usage API ${r.status}: ${r.text.slice(0, 160)}`);
   const j = r.json ?? {};
 

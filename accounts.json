@@ -1,9 +1,9 @@
 {
   "port": 4545,
   "accounts": [
-    { "name": "Claude 1", "kind": "claude", "dir": "C:/Users/Home/.claude" },
-    { "name": "Claude 2", "kind": "claude", "dir": "C:/Users/Home/.claude-2" },
-    { "name": "Codex 1",  "kind": "codex",  "dir": "C:/Users/Home/.codex" },
-    { "name": "Codex 2",  "kind": "codex",  "dir": "C:/Users/Home/.codex-2" }
+    { "name": "Claude 1", "kind": "claude", "dir": "~/.claude" },
+    { "name": "Claude 2", "kind": "claude", "dir": "~/.claude-2" },
+    { "name": "Codex 1",  "kind": "codex",  "dir": "~/.codex" },
+    { "name": "Codex 2",  "kind": "codex",  "dir": "~/.codex-2" }
   ]
 }
