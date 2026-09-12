@@ -92,6 +92,23 @@ async function claudeReadCreds(dir) {
   return { file, root, o };
 }
 
+// Account identity comes from the token, not from .claude.json (that file goes stale after account switches).
+const CLAUDE_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
+async function claudeProfile(state, o) {
+  const key = o.accessToken.slice(-16);
+  if (state.profileKey === key) return state.profile;
+  let r;
+  try {
+    r = await fetchJson(CLAUDE_PROFILE_URL, {
+      headers: { authorization: `Bearer ${o.accessToken}`, accept: "application/json", "anthropic-beta": CLAUDE_BETA, "user-agent": claudeUserAgent },
+    });
+  } catch { return null; } // optional enrichment: never fail the usage poll
+  if (!r.ok) return null; // token changed and lookup failed: no stale email from a previous account
+  state.profileKey = key;
+  state.profile = { email: r.json?.account?.email ?? null, org: r.json?.organization?.name ?? null };
+  return state.profile;
+}
+
 function claudeExpired(o) {
   return typeof o.expiresAt === "number" && o.expiresAt <= Date.now() + CLAUDE_EXPIRY_SKEW_MS;
 }
@@ -183,7 +200,8 @@ async function claudeFetch(acct, state) {
     notes.push(`Extra usage: ${extra.used_credits ?? extra.usedCredits ?? 0} / ${extra.monthly_limit ?? extra.monthlyLimit ?? "?"} ${extra.currency ?? ""}`.trim());
   }
   return {
-    plan: [o.subscriptionType, o.rateLimitTier].filter(Boolean).join(" · "),
+    plan: o.subscriptionType ?? "",
+    email: (await claudeProfile(state, o))?.email ?? null,
     tokenExpiresAt: o.expiresAt ? new Date(o.expiresAt).toISOString() : null,
     windows,
     notes,
