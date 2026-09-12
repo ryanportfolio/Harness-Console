@@ -197,7 +197,7 @@ async function claudeFetch(acct, state) {
     notes.push(`Extra usage: ${extra.used_credits ?? extra.usedCredits ?? 0} / ${extra.monthly_limit ?? extra.monthlyLimit ?? "?"} ${extra.currency ?? ""}`.trim());
   }
   return {
-    plan: [o.subscriptionType, o.rateLimitTier].filter(Boolean).join(" · "),
+    plan: o.subscriptionType ?? "",
     email: (await claudeProfile(state, o))?.email ?? null,
     tokenExpiresAt: o.expiresAt ? new Date(o.expiresAt).toISOString() : null,
     windows,
