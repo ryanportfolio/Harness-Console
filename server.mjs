@@ -7,6 +7,8 @@ import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { TokenScanner } from "./tokens.mjs";
+import { Pricing } from "./pricing.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const execP = promisify(exec);
@@ -31,6 +33,7 @@ await mkdir(STATE_DIR, { recursive: true });
 const CLAUDE_POLL_MS = (config.claudePollSeconds ?? 180) * 1000; // /api/oauth/usage 429s below ~180s
 const CODEX_POLL_MS = (config.codexPollSeconds ?? 60) * 1000;
 const HTTP_TIMEOUT_MS = 15_000;
+const TOKEN_SCAN_MS = (config.tokenScanSeconds ?? 300) * 1000;
 
 // ---------- shared ----------
 
@@ -366,6 +369,28 @@ for (const acct of config.accounts) {
   schedule(acct);
 }
 
+// ---------- tokens ----------
+
+await mkdir(path.join(STATE_DIR, "tokens"), { recursive: true });
+const pricing = new Pricing(path.join(STATE_DIR, "pricing.json"), writeAtomic, log);
+await pricing.load();
+const scanners = new Map(config.accounts.map((a) => [a.name, new TokenScanner(a, path.join(STATE_DIR, "tokens", `${a.name.replace(/[^\w.-]+/g, "_")}.json`), writeAtomic, log)]));
+for (const s of scanners.values()) await s.load();
+
+async function scanAll() {
+  await pricing.refresh();
+  for (const s of scanners.values()) await s.scan();
+}
+(async function tokenTick() { await scanAll(); setTimeout(tokenTick, TOKEN_SCAN_MS).unref?.(); })();
+
+function tokensPayload(days) {
+  return {
+    now: new Date().toISOString(),
+    pricing: { status: pricing.status, fetchedAt: pricing.fetchedAt ? new Date(pricing.fetchedAt).toISOString() : null },
+    accounts: config.accounts.map((a) => ({ name: a.name, kind: a.kind, ...scanners.get(a.name).summary(days, pricing) })),
+  };
+}
+
 // ---------- http ----------
 
 const indexHtml = await readFile(path.join(here, "index.html"), "utf8");
@@ -377,8 +402,14 @@ createServer((req, res) => {
     res.end(JSON.stringify({ now: new Date().toISOString(), accounts: config.accounts.map((a) => snapshots.get(a.name) ?? { name: a.name, kind: a.kind, ok: false, error: "not fetched yet" }) }));
     return;
   }
+  if (url.pathname === "/api/tokens") {
+    const days = Math.min(365, Math.max(1, Number(url.searchParams.get("days")) || 30));
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify(tokensPayload(days)));
+    return;
+  }
   if (url.pathname === "/api/refresh" && req.method === "POST") {
-    Promise.all(config.accounts.map(pollOnce)).then(() => { res.writeHead(204); res.end(); });
+    Promise.all([...config.accounts.map(pollOnce), scanAll()]).then(() => { res.writeHead(204); res.end(); });
     return;
   }
   if (url.pathname === "/") {
