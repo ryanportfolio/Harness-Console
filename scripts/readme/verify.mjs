@@ -32,7 +32,7 @@ for (const v of ["light", "narrow-light"]) {
   const clocks = (text.match(/class="hand"/g) ?? []).length;
   const expected = F.claudeWindows.length + 2 + 3;
   if (clocks !== expected) fail(`masthead-${v}: ${clocks} clocks, expected ${expected}`);
-  if (/font-weight="[6-9]00"|font-weight:[6-9]00|font-weight="bold"/.test(text)) fail(`masthead-${v}: bold text`);
+  if (/font-weight="[5-9]00"|font-weight:[5-9]00|font-weight="bold"/.test(text)) fail(`masthead-${v}: text heavier than 400`);
   if (/animation-iteration-count:(?!infinite)/.test(text)) fail(`masthead-${v}: one-shot animation`);
 }
 

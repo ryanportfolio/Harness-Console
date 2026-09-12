@@ -117,7 +117,7 @@ function masthead(t, narrow) {
       y += narrow ? 32 : 36;
       let lx = px;
       if (r.color) { body.push(`<circle cx="${px + 5}" cy="${y - 5}" r="5" fill="${t[r.color]}"/>`); lx = px + 18; }
-      body.push(`<text x="${lx}" y="${y}" class="lbl" font-size="${narrow ? 13 : 15}" font-weight="500">${esc(r.group)}</text>`);
+      body.push(`<text x="${lx}" y="${y}" class="lbl" font-size="${narrow ? 13 : 15}">${esc(r.group)}</text>`);
       const hx = narrow ? W - px : col.src;
       body.push(`<text x="${hx}" y="${y}" text-anchor="${narrow ? "end" : "start"}" class="mut" font-size="${narrow ? 11 : 13}">${esc(r.host)}</text>`);
       continue;
@@ -142,7 +142,9 @@ function masthead(t, narrow) {
   }
 
   // legend: the dashboard's bar colours, then the clock scale
-  y += narrow ? 40 : 44;
+  y += narrow ? 24 : 26;
+  body.push(`<line x1="${px}" x2="${W - px}" y1="${y}" y2="${y}" class="rule"/>`);
+  y += narrow ? 26 : 28;
   const lsize = narrow ? 11 : 12;
   body.push(`<text x="${px}" y="${y}" class="hd" font-size="11">DASHBOARD BARS</text>`);
   let lx = narrow ? px : px + monoWidth("DASHBOARD BARS", 11) * 1.1 + 16;

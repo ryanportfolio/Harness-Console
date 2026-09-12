@@ -58,14 +58,22 @@
   .tokens .head .name { font-size: 24px; }
   .tokens .head .dot { margin-right: 4px; }
   .tokens .head .total { font-weight: 500; font-size: 28px; font-variant-numeric: tabular-nums; margin-left: auto; }
-  .tokens .split, .tokens .models, .tokens .cost { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .tokens .cost b { color: var(--fg); font-weight: 500; }
-  .tokens .note { font-size: 12px; color: var(--muted); text-transform: uppercase; margin-top: 8px; }
-  .strip { display: flex; align-items: flex-end; gap: 3px; height: 48px; margin-top: 8px; }
-  .strip i { flex: 1; background: var(--codex); opacity: .6; border-radius: 100px 100px 0 0; min-height: 2px; }
+  .tokens .row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+  .tokens .row .hd { font-size: 12px; color: var(--muted); text-transform: uppercase; width: 64px; flex: none; }
+  .stack { display: flex; flex: 1; height: 12px; border-radius: 100px; overflow: hidden; background: var(--track); gap: 2px; }
+  .stack i { display: block; height: 100%; min-width: 2px; background: var(--hue); cursor: default; }
+  .stack i:hover { filter: brightness(.85); }
+  .tokens .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--muted); padding-left: 76px; }
+  .tokens .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--sw); margin-right: 6px; vertical-align: -1px; }
+  .tokens[data-kind="claude"] { --hue: var(--claude); } .tokens[data-kind="codex"] { --hue: var(--codex); }
+  .tokens .foot { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); text-transform: uppercase; }
+  .tokens .foot .pill { border: 1px solid var(--line); border-radius: 100px; padding: 6px 12px; color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .tokens .foot .pill.warn { color: var(--warn); }
+  .strip { display: flex; align-items: flex-end; gap: 3px; height: 56px; margin-top: 12px; }
+  .strip i { flex: 1; background: var(--hue); opacity: .6; border-radius: 100px 100px 0 0; min-height: 2px; cursor: default; }
+  .strip i:hover { opacity: 1; }
   .strip i.zero { background: var(--track); opacity: 1; }
-  .tokens[data-kind="claude"] .strip i { background: var(--claude); }
-  .tokens[data-kind="claude"] .strip i.zero { background: var(--track); }
+  #tip { position: fixed; z-index: 10; pointer-events: none; display: none; background: var(--fg); color: var(--bg); font: 400 13px/1.35 var(--mono); padding: 8px 12px; border-radius: 100px; white-space: nowrap; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -76,6 +84,7 @@
   <button id="refresh">Refresh now</button>
 </header>
 <section id="tokens"></section>
+<div id="tip"></div>
 <main id="main"></main>
 <script>
   const $ = (s) => document.querySelector(s);
@@ -105,23 +114,43 @@
   function usd(n) { return n >= 100 ? "$" + Math.round(n) : "$" + n.toFixed(2); }
 
   const KIND = { claude: "Claude Code", codex: "Codex" };
+  // Stacked bar: segments proportional to `parts` [{label, value, alpha}], numbers live in the tooltip.
+  function stack(parts, total, unit) {
+    const seg = parts.filter((p) => p.value > 0).map((p) =>
+      `<i style="flex:${p.value};opacity:${p.alpha}" data-tip="${esc(p.label)} · ${unit(p.value)} · ${(p.value / total * 100).toFixed(1)}%"></i>`).join("");
+    const legend = parts.filter((p) => p.value > 0).map((p) =>
+      `<span style="--sw:color-mix(in srgb, var(--hue) ${Math.round(p.alpha * 100)}%, var(--track))">${esc(p.label)}</span>`).join("");
+    return { seg, legend };
+  }
   function tokensBlock(t) {
     const head = `<div class="head"><span class="dot ${esc(t.kind)}"></span><span class="name">${KIND[t.kind]} tokens, last ${t.days}d</span>`;
     if (!t.files) return `<div class="tokens" data-kind="${esc(t.kind)}">${head}<span class="total">no transcripts</span></div></div>`;
     const max = Math.max(1, ...t.series.map((d) => d.total));
-    const strip = t.series.map((d) => `<i class="${d.total ? "" : "zero"}" style="height:${Math.max(2, Math.round(d.total / max * 100))}%" title="${d.day}: ${fmt(d.total)}${d.costUsd ? " · " + usd(d.costUsd) : ""}"></i>`).join("");
-    const models = Object.entries(t.byModel).sort((a, b) => b[1].total - a[1].total).slice(0, 3)
-      .map(([m, v]) => `${esc(m.replace(/-\d{8}$/, ""))} ${fmt(v.total)}`).join(" · ");
-    const cost = t.costUsd || t.unpriced
-      ? `<div class="cost">${t.costUsd ? `<b>${usd(t.costUsd)}</b> API-equivalent` : ""}${t.unpriced ? `${t.costUsd ? ", " : ""}${fmt(t.unpriced)} tokens unpriced` : ""}</div>` : "";
+    const day = (d) => new Date(d.day + "T00:00").toLocaleDateString([], { month: "short", day: "numeric" });
+    const strip = t.series.map((d) => `<i class="${d.total ? "" : "zero"}" style="height:${Math.max(2, Math.round(d.total / max * 100))}%" data-tip="${day(d)} · ${fmt(d.total)}${d.costUsd ? " · " + usd(d.costUsd) : ""}"></i>`).join("");
+    const split = stack([
+      { label: "input", value: t.uncachedIn, alpha: 1 }, { label: "cache read", value: t.cachedIn, alpha: .45 },
+      { label: "cache write", value: t.cacheWrite, alpha: .25 }, { label: "output", value: t.out, alpha: .7 },
+    ], t.total, fmt);
+    const top = Object.entries(t.byModel).sort((a, b) => b[1].total - a[1].total);
+    const alphas = [1, .6, .35, .18];
+    const parts = top.slice(0, 3).map(([m, v], i) => ({ label: m.replace(/-\d{8}$/, ""), value: v.total, alpha: alphas[i] }));
+    const rest = top.slice(3).reduce((n, [, v]) => n + v.total, 0);
+    if (rest) parts.push({ label: `${top.length - 3} other`, value: rest, alpha: alphas[3] });
+    const models = stack(parts, t.total, fmt);
     return `
       <div class="tokens" data-kind="${esc(t.kind)}">
         ${head}<span class="total">${fmt(t.total)}</span></div>
-        <div class="split">in ${fmt(t.uncachedIn)} · cached ${fmt(t.cachedIn)} · cache write ${fmt(t.cacheWrite)} · out ${fmt(t.out)}</div>
-        ${cost}
-        ${models ? `<div class="models">${models}</div>` : ""}
+        <div class="row"><span class="hd">split</span><div class="stack">${split.seg}</div></div>
+        <div class="legend">${split.legend}</div>
+        <div class="row"><span class="hd">models</span><div class="stack">${models.seg}</div></div>
+        <div class="legend">${models.legend}</div>
         <div class="strip">${strip}</div>
-        <div class="note">all accounts on this machine, from <code>${t.dirs.map(esc).join("</code>, <code>")}</code></div>
+        <div class="foot">
+          ${t.costUsd ? `<span class="pill" data-tip="same traffic at public API rates, LiteLLM table">${usd(t.costUsd)} API-equivalent</span>` : ""}
+          ${t.unpriced ? `<span class="pill warn" data-tip="no price for these models; add priceAliases in accounts.json">${fmt(t.unpriced)} unpriced</span>` : ""}
+          <span data-tip="${esc(t.dirs.join(" · "))}">all accounts on this machine</span>
+        </div>
       </div>`;
   }
 
@@ -171,6 +200,19 @@
     const ok = last.accounts.filter((a) => a.ok).length;
     $("#meta").textContent = `${ok}/${last.accounts.length} accounts live · ${new Date().toLocaleTimeString()}`;
   }
+  const tip = $("#tip");
+  document.addEventListener("pointerover", (e) => {
+    const el = e.target.closest("[data-tip]");
+    if (!el) { tip.style.display = "none"; return; }
+    tip.textContent = el.dataset.tip; tip.style.display = "block";
+  });
+  document.addEventListener("pointermove", (e) => {
+    if (tip.style.display !== "block") return;
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.min(e.clientX + 14, innerWidth - w - 8) + "px";
+    tip.style.top = (e.clientY - h - 14 < 0 ? e.clientY + 18 : e.clientY - h - 14) + "px";
+  });
+  document.addEventListener("pointerout", (e) => { if (e.target.closest("[data-tip]") && !e.relatedTarget?.closest?.("[data-tip]")) tip.style.display = "none"; });
   $("#days").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
     days = Number(b.dataset.d);
