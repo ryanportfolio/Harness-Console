@@ -1,0 +1,13 @@
+{
+  "name": "claude-starter",
+  "owner": { "name": "ryanportfolio" },
+  "description": "Hosts the Harness Firmware skills plugin. Install the template's Claude Code skill set into any project.",
+  "plugins": [
+    {
+      "name": "claude-starter",
+      "source": "./",
+      "category": "workflow",
+      "tags": ["harness-firmware", "agent-firmware", "starter", "workflow", "skills"]
+    }
+  ]
+}

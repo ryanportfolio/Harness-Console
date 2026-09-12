@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "skills": {
+    "addskill": "native",
+    "brainstorming": "native",
+    "bro": "native",
+    "caveman": "native",
+    "enhance-prompt": "native",
+    "fable-mode": "native",
+    "handoff-audit": "native",
+    "impartial-review": "native",
+    "init-project": "native",
+    "long-horizon": "native",
+    "merge": "native",
+    "perf-loop": "native",
+    "recall": "native",
+    "refine": "native",
+    "showpiece": "native",
+    "unslop": "native",
+    "why": "native",
+    "wow-loop": "native",
+    "writing": "native",
+    "writing-plans": "native",
+    "writing-skills": "disabled"
+  }
+}
