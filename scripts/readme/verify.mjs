@@ -46,5 +46,18 @@ for (const e of F.endpoints) if (!md.includes(`${e.method} ${e.host}${e.path}`))
 for (const name of Object.keys(NEED)) if ((md.split(`assets/readme/${name}-light.svg`).length - 1) !== 1) fail(`README: panel ${name} placed ${md.split(`assets/readme/${name}-light.svg`).length - 1} times`);
 if (/—/.test(md)) fail("README: em dash");
 
+// Every link resolves: local targets exist on disk, remote ones answer below 400.
+const links = [...new Set([...md.matchAll(/\]\(([^)\s]+)\)|src="([^"]+)"/g)].map((m) => m[1] ?? m[2]))];
+for (const target of links) {
+  if (/^https?:/.test(target)) {
+    let status = 0;
+    for (const method of ["HEAD", "GET"]) {
+      try { status = (await fetch(target, { method, redirect: "follow", signal: AbortSignal.timeout(15_000) })).status; } catch { status = 0; }
+      if (status && status < 400) break;
+    }
+    if (!(status && status < 400)) fail(`README: link ${target} answered ${status || "nothing"}`);
+  } else if (!fs.existsSync(path.join(ROOT, target.split("#")[0]))) fail(`README: link ${target} missing on disk`);
+}
+
 if (bad) { console.error(`${bad} problem(s)`); process.exit(1); }
 console.log("verify: ok");
