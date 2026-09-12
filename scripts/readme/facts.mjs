@@ -1,100 +1,88 @@
+// Every number the README shows, read from the source that defines it.
+// A regex that stops matching throws, so a renamed constant fails the build
+// instead of leaving a stale figure in the art.
+
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { absolute, frontmatter, read, readJson } from "./lib.mjs";
 
-function directories(relativeRoot) {
-  return fs.readdirSync(absolute(relativeRoot), { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .filter((name) => fs.existsSync(absolute(`${relativeRoot}/${name}/SKILL.md`)))
-    .sort();
-}
+export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const read = (rel) => fs.readFileSync(path.join(ROOT, rel), "utf8");
 
-function sameMembers(actual, expected, label) {
-  if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) {
-    throw new Error(`${label} drift\nactual: ${actual.join(", ")}\nexpected: ${expected.join(", ")}`);
-  }
-}
-
-function normalizedBytes(text) {
-  return Buffer.byteLength(text.replaceAll("\r\n", "\n"));
-}
-
-export function expectedCodexNames(canonicalNames, modes = {}, overrides = {}) {
-  const enabled = name => modes[name] !== "disabled" && overrides[name] !== "off";
-  const names = new Set(canonicalNames.filter(enabled));
-  for (const [name, mode] of Object.entries(modes)) if (mode === "native" && enabled(name)) names.add(name);
-  return [...names].sort();
+function num(text, re, label) {
+  const m = text.match(re);
+  if (!m) throw new Error(`facts: ${label} not found`);
+  return Number(m[1]);
 }
 
 export function collectFacts() {
-  const inventory = readJson("scripts/readme/items.json");
-  const groupIds = inventory.groups.map((group) => group.id);
-  sameMembers([...groupIds].sort(), ["core", "discipline", "specialist"], "skill groups");
+  const server = read("server.mjs");
+  const tokens = read("tokens.mjs");
+  const pricing = read("pricing.mjs");
+  const page = read("index.html");
 
-  const canonicalNames = directories(".claude/skills");
-  const codexNames = directories(".agents/skills");
-  const inventoryNames = inventory.skills.map((skill) => skill.name).sort();
-  sameMembers(inventoryNames, canonicalNames, "README skill inventory");
-  const modes = fs.existsSync(absolute(".agents/skill-modes.json")) ? readJson(".agents/skill-modes.json").skills : {};
-  const overrides = readJson(".claude/settings.json").skillOverrides ?? {};
-  sameMembers(codexNames, expectedCodexNames(canonicalNames, modes, overrides), "Codex skill inventory");
+  // accounts.json is committed and the server reads it with `config.X ?? literal`,
+  // so the README states the effective value, not the fallback.
+  const config = JSON.parse(read("accounts.json"));
+  const configured = (key, fallback) => {
+    if (config[key] === undefined) return fallback;
+    if (!Number.isInteger(config[key]) || config[key] <= 0) throw new Error(`facts: accounts.json ${key} is not a positive integer`);
+    return config[key];
+  };
+  const claudePollSeconds = configured("claudePollSeconds", num(server, /config\.claudePollSeconds \?\? (\d+)/, "claudePollSeconds"));
+  const codexPollSeconds = configured("codexPollSeconds", num(server, /config\.codexPollSeconds \?\? (\d+)/, "codexPollSeconds"));
+  const tokenScanSeconds = configured("tokenScanSeconds", num(server, /config\.tokenScanSeconds \?\? (\d+)/, "tokenScanSeconds"));
+  const port = configured("port", num(server, /config\.port \?\? (\d+)/, "port"));
+  const retentionDays = num(tokens, /RETENTION_MS = (\d+) \* 24 \* 3600 \* 1000/, "RETENTION_MS");
+  const codexExpiryWarnHours = num(server, /CODEX_EXPIRY_WARN_MS = (\d+) \* 60 \* 60 \* 1000/, "CODEX_EXPIRY_WARN_MS");
+  const pageFetchSeconds = num(page, /setInterval\(load, (\d+)_000\)/, "page fetch interval");
+  const countdownSeconds = num(page, /setInterval\(render, (\d+)_000\)/, "countdown interval");
+  const warnAt = num(page, /p >= (\d+) \? "warn"/, "warn threshold");
+  const badAt = num(page, /p >= (\d+) \? "bad"/, "bad threshold");
+  const pricingTtlHours = num(pricing, /TTL_MS = (\d+) \* 3600 \* 1000/, "pricing TTL");
 
-  const tierCounts = Object.fromEntries(groupIds.map((group) => [group, 0]));
-  const skills = inventory.skills.map((item) => {
-    if (!groupIds.includes(item.group)) throw new Error(`${item.name}: unknown group ${item.group}`);
-    tierCounts[item.group] += 1;
-    const relativePath = `.claude/skills/${item.name}/SKILL.md`;
-    const text = read(relativePath);
-    const metadata = frontmatter(text, relativePath);
-    if (metadata.name && metadata.name !== item.name) throw new Error(`${relativePath}: name ${metadata.name} does not match directory`);
-    return {
-      ...item,
-      description: metadata.description,
-      bytes: normalizedBytes(text),
-    };
-  });
+  const claudeWindows = [...server.matchAll(/win\(j\.\w+ \?\? j\.\w+, "([^"]+)"\)/g)].map((m) => m[1]);
+  if (claudeWindows.length !== 4) throw new Error(`facts: expected 4 Claude windows, found ${claudeWindows.length}`);
 
-  const requiredCounts = { core: 9, discipline: 11, specialist: 14 };
-  for (const [group, expected] of Object.entries(requiredCounts)) {
-    if (tierCounts[group] !== expected) throw new Error(`${group}: expected ${expected}, found ${tierCounts[group]}`);
+  const urls = {
+    claudeUsage: server.match(/CLAUDE_USAGE_URL = "([^"]+)"/)?.[1],
+    claudeToken: server.match(/CLAUDE_TOKEN_URL = "([^"]+)"/)?.[1],
+    claudeProfile: server.match(/CLAUDE_PROFILE_URL = "([^"]+)"/)?.[1],
+    codexBase: server.match(/CODEX_BASE_URL = "([^"]+)"/)?.[1],
+    rates: pricing.match(/RATES_URL =\s*"([^"]+)"/)?.[1],
+  };
+  for (const [k, v] of Object.entries(urls)) if (!v) throw new Error(`facts: url ${k} not found`);
+  const codexPaths = [...new Set([...server.matchAll(/CODEX_BASE_URL\}(\/[\w/-]+)`/g)].map((m) => m[1]))];
+  if (codexPaths.length !== 2) throw new Error(`facts: expected 2 Codex paths, found ${codexPaths.length}`);
+
+  // The token refresh is the only POST the server makes.
+  const posts = (server.match(/method: "POST"/g) ?? []).length;
+  if (posts !== 1) throw new Error(`facts: expected exactly one POST in server.mjs, found ${posts}`);
+
+  // No dependencies: every import is a node: builtin or a local file.
+  const sources = ["server.mjs", "tokens.mjs", "pricing.mjs"];
+  for (const f of sources) {
+    for (const m of read(f).matchAll(/^import .* from "([^"]+)";/gm)) {
+      if (!m[1].startsWith("node:") && !m[1].startsWith("./")) throw new Error(`facts: ${f} imports ${m[1]}; README claims zero dependencies`);
+    }
   }
+  if (fs.existsSync(path.join(ROOT, "package.json"))) throw new Error("facts: package.json exists; README claims zero dependencies");
 
-  const referenceFileCount = fs.readdirSync(absolute(".claude/reference"), { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .length;
-  const kernelBytes = normalizedBytes(read("CLAUDE.md"));
-  const catalogBytes = skills.reduce(
-    (total, skill) => total + Buffer.byteLength(skill.name) + Buffer.byteLength(skill.description),
-    0,
-  );
-  const catalogChars = skills.reduce((total, skill) => total + skill.name.length + skill.description.length, 0);
-  const onDemandBytes = skills.reduce((total, skill) => total + skill.bytes, 0);
-  const residentBytes = kernelBytes + catalogBytes;
+  const lines = [...sources, "index.html"].reduce((n, f) => n + read(f).split("\n").filter((l) => l.trim()).length, 0);
 
-  const runtimeNames = ["Claude Code", "Codex"];
+  const host = (u) => new URL(u).host;
+  const endpoints = [
+    { method: "GET", host: host(urls.claudeUsage), path: new URL(urls.claudeUsage).pathname, what: "Claude windows" },
+    { method: "GET", host: host(urls.claudeProfile), path: new URL(urls.claudeProfile).pathname, what: "Claude email" },
+    { method: "POST", host: host(urls.claudeToken), path: new URL(urls.claudeToken).pathname, what: "Claude token refresh" },
+    { method: "GET", host: host(urls.codexBase), path: new URL(urls.codexBase).pathname + codexPaths[0], what: "Codex windows, plan, credits" },
+    { method: "GET", host: host(urls.codexBase), path: new URL(urls.codexBase).pathname + codexPaths[1], what: "Codex banked resets" },
+    { method: "GET", host: host(urls.rates), path: new URL(urls.rates).pathname, what: "model prices (LiteLLM)" },
+  ];
 
   return {
-    skillCount: canonicalNames.length,
-    codexSkillCount: codexNames.length,
-    runtimeNames,
-    runtimeCount: runtimeNames.length,
-    referenceFileCount,
-    tierCounts,
-    canonicalNames,
-    inventoryNames,
-    groups: inventory.groups,
-    skills,
-    kernelBytes,
-    catalogBytes,
-    catalogChars,
-    onDemandBytes,
-    residentBytes,
-    lazyRatio: onDemandBytes / residentBytes,
+    claudePollSeconds, codexPollSeconds, tokenScanSeconds, port, retentionDays, codexExpiryWarnHours,
+    pageFetchSeconds, countdownSeconds, warnAt, badAt, pricingTtlHours, claudeWindows, endpoints, lines,
+    sourceFiles: sources.length + 1,
   };
-}
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  process.stdout.write(`${JSON.stringify(collectFacts(), null, 2)}\n`);
 }

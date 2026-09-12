@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 852" width="900" height="852" role="img" aria-label="UsageTracker schedule board: 4 Claude Code rate-limit windows polled every 180 seconds, 2 Codex windows polled every 60 seconds, token totals over 7, 30 and 90 days rescanned every 300 seconds, and one write, the Claude token refresh.">
+<style>
+.ttl{font-family:'Untitled Serif',ui-serif,Georgia,Cambria,'Times New Roman',Times,serif;font-weight:400;fill:#f6f3f1;letter-spacing:-0.02em}
+.lbl{font-family:'ABC Diatype Mono','JetBrains Mono','IBM Plex Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;fill:#f6f3f1;letter-spacing:-0.02em}
+.bdy{font-family:'ABC Diatype Mono','JetBrains Mono','IBM Plex Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;fill:#d9d4d0;letter-spacing:-0.02em}
+.mut{font-family:'ABC Diatype Mono','JetBrains Mono','IBM Plex Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;fill:#a29e9b;letter-spacing:-0.02em}
+.hd{font-family:'ABC Diatype Mono','JetBrains Mono','IBM Plex Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;fill:#a29e9b;letter-spacing:0.08em}
+.num{font-family:'ABC Diatype Mono','JetBrains Mono','IBM Plex Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;fill:#f6f3f1;font-variant-numeric:tabular-nums}
+.rule{stroke:#4e4d4d;stroke-width:1}
+.card{fill:#242424;stroke:#4e4d4d;stroke-width:1}
+.pill{fill:none;stroke:#4e4d4d;stroke-width:1}
+.face{fill:none;stroke:#3a3938;stroke-width:3}
+.hand{fill:none;stroke:#f6f3f1;stroke-width:3;stroke-dasharray:50.27;stroke-dashoffset:0;animation-name:drain;animation-timing-function:linear;animation-iteration-count:infinite}
+@keyframes drain{from{stroke-dashoffset:0}to{stroke-dashoffset:50.27}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}.hand{stroke-dashoffset:0}}</style>
+<defs><filter id="w" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="40"/></filter><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#ff9473" stop-opacity="0.55"/><stop offset="1" stop-color="#a0b5eb" stop-opacity="0.55"/></linearGradient><clipPath id="c"><rect x="0.5" y="0.5" width="899" height="851" rx="40"/></clipPath></defs>
+<rect x="0.5" y="0.5" width="899" height="851" rx="40" class="card"/>
+<g clip-path="url(#c)"><ellipse cx="760" cy="40" rx="220" ry="90" fill="url(#g)" filter="url(#w)"/></g>
+<text x="40" y="92" class="ttl" font-size="48">UsageTracker</text>
+<text x="40" y="128" class="bdy" font-size="16">Rate-limit windows, reset clocks and token totals for every</text>
+<text x="40" y="152" class="bdy" font-size="16">Claude Code and Codex account on this machine, on one local</text>
+<text x="40" y="176" class="bdy" font-size="16">page.</text>
+<rect x="40" y="201" width="88.8" height="24" rx="18" class="pill"/><text x="52" y="218" class="mut" font-size="12">READ-ONLY</text>
+<rect x="136.8" y="201" width="124.8" height="24" rx="18" class="pill"/><text x="148.8" y="218" class="mut" font-size="12">127.0.0.1:4545</text>
+<rect x="269.6" y="201" width="124.8" height="24" rx="18" class="pill"/><text x="281.6" y="218" class="mut" font-size="12">0 DEPENDENCIES</text>
+<text x="40" y="266" text-anchor="start" class="hd" font-size="11">WINDOW</text>
+<text x="340" y="266" text-anchor="start" class="hd" font-size="11">LENGTH</text>
+<text x="590" y="266" text-anchor="start" class="hd" font-size="11">POLLED</text>
+<text x="690" y="266" text-anchor="start" class="hd" font-size="11">SOURCE</text>
+<line x1="40" x2="860" y1="276" y2="276" class="rule"/>
+<circle cx="45" cy="307" r="5" fill="#e0824f"/>
+<text x="58" y="312" class="lbl" font-size="15">Claude Code</text>
+<text x="690" y="312" text-anchor="start" class="mut" font-size="13">api.anthropic.com</text>
+<text x="40" y="354" class="lbl" font-size="15">Session (5h)</text>
+<g transform="rotate(-90 348 349)"><circle cx="348" cy="349" r="8" class="face"/><circle cx="348" cy="349" r="8" class="hand" style="animation-duration:5s"/></g>
+<text x="364" y="354" class="num" font-size="14">5 h</text>
+<text x="590" y="354" text-anchor="start" class="num" font-size="14">180 s</text>
+<text x="690" y="354" class="mut" font-size="13">/api/oauth/usage</text>
+<line x1="40" x2="860" y1="368" y2="368" class="rule"/>
+<text x="40" y="396" class="lbl" font-size="15">Weekly</text>
+<g transform="rotate(-90 348 391)"><circle cx="348" cy="391" r="8" class="face"/><circle cx="348" cy="391" r="8" class="hand" style="animation-duration:168s"/></g>
+<text x="364" y="396" class="num" font-size="14">7 d</text>
+<text x="590" y="396" text-anchor="start" class="num" font-size="14">180 s</text>
+<text x="690" y="396" class="mut" font-size="13">/api/oauth/usage</text>
+<line x1="40" x2="860" y1="410" y2="410" class="rule"/>
+<text x="40" y="438" class="lbl" font-size="15">Weekly Opus</text>
+<text x="149" y="438" class="mut" font-size="12">when the plan reports it</text>
+<g transform="rotate(-90 348 433)"><circle cx="348" cy="433" r="8" class="face"/><circle cx="348" cy="433" r="8" class="hand" style="animation-duration:168s"/></g>
+<text x="364" y="438" class="num" font-size="14">7 d</text>
+<text x="590" y="438" text-anchor="start" class="num" font-size="14">180 s</text>
+<text x="690" y="438" class="mut" font-size="13">/api/oauth/usage</text>
+<line x1="40" x2="860" y1="452" y2="452" class="rule"/>
+<text x="40" y="480" class="lbl" font-size="15">Weekly Sonnet</text>
+<text x="167" y="480" class="mut" font-size="12">when the plan reports it</text>
+<g transform="rotate(-90 348 475)"><circle cx="348" cy="475" r="8" class="face"/><circle cx="348" cy="475" r="8" class="hand" style="animation-duration:168s"/></g>
+<text x="364" y="480" class="num" font-size="14">7 d</text>
+<text x="590" y="480" text-anchor="start" class="num" font-size="14">180 s</text>
+<text x="690" y="480" class="mut" font-size="13">/api/oauth/usage</text>
+<line x1="40" x2="860" y1="494" y2="494" class="rule"/>
+<circle cx="45" cy="511" r="5" fill="#7d9df0"/>
+<text x="58" y="516" class="lbl" font-size="15">Codex</text>
+<text x="690" y="516" text-anchor="start" class="mut" font-size="13">chatgpt.com</text>
+<text x="40" y="558" class="lbl" font-size="15">Session (5h)</text>
+<g transform="rotate(-90 348 553)"><circle cx="348" cy="553" r="8" class="face"/><circle cx="348" cy="553" r="8" class="hand" style="animation-duration:5s"/></g>
+<text x="364" y="558" class="num" font-size="14">5 h</text>
+<text x="590" y="558" text-anchor="start" class="num" font-size="14">60 s</text>
+<text x="690" y="558" class="mut" font-size="13">/backend-api/wham/usage</text>
+<line x1="40" x2="860" y1="572" y2="572" class="rule"/>
+<text x="40" y="600" class="lbl" font-size="15">Weekly</text>
+<g transform="rotate(-90 348 595)"><circle cx="348" cy="595" r="8" class="face"/><circle cx="348" cy="595" r="8" class="hand" style="animation-duration:168s"/></g>
+<text x="364" y="600" class="num" font-size="14">7 d</text>
+<text x="590" y="600" text-anchor="start" class="num" font-size="14">60 s</text>
+<text x="690" y="600" class="mut" font-size="13">/backend-api/wham/usage</text>
+<line x1="40" x2="860" y1="614" y2="614" class="rule"/>
+<text x="40" y="636" class="lbl" font-size="15">Tokens</text>
+<text x="690" y="636" text-anchor="start" class="mut" font-size="13">local transcripts</text>
+<text x="40" y="678" class="lbl" font-size="15">Last 7 / 30 / 90 d</text>
+<g transform="rotate(-90 348 673)"><circle cx="348" cy="673" r="8" class="face"/><circle cx="348" cy="673" r="8" class="hand" style="animation-duration:168s"/></g>
+<text x="364" y="678" class="num" font-size="14">7 d</text>
+<g transform="rotate(-90 411.2 673)"><circle cx="411.2" cy="673" r="8" class="face"/><circle cx="411.2" cy="673" r="8" class="hand" style="animation-duration:720s"/></g>
+<text x="427.2" y="678" class="num" font-size="14">30 d</text>
+<g transform="rotate(-90 482.8 673)"><circle cx="482.8" cy="673" r="8" class="face"/><circle cx="482.8" cy="673" r="8" class="hand" style="animation-duration:2160s"/></g>
+<text x="498.8" y="678" class="num" font-size="14">90 d</text>
+<text x="590" y="678" text-anchor="start" class="num" font-size="14">300 s</text>
+<text x="690" y="678" class="mut" font-size="13">.state/tokens/</text>
+<line x1="40" x2="860" y1="692" y2="692" class="rule"/>
+<text x="40" y="720" class="lbl" font-size="15">Claude token refresh</text>
+<text x="340" y="720" class="mut" font-size="13">the only write</text>
+<text x="590" y="720" text-anchor="start" class="num" font-size="14">on expiry</text>
+<text x="690" y="720" class="mut" font-size="13">/v1/oauth/token</text>
+<line x1="40" x2="860" y1="734" y2="734" class="rule"/>
+<line x1="40" x2="860" y1="746" y2="746" class="rule"/>
+<text x="40" y="774" class="hd" font-size="11">DASHBOARD BARS</text>
+<rect x="157.64" y="766" width="30" height="6" rx="3" fill="#3fb950"/>
+<text x="195.64" y="774" class="mut" font-size="12">under 70% used</text>
+<rect x="320.44" y="766" width="30" height="6" rx="3" fill="#d29922"/>
+<text x="358.44" y="774" class="mut" font-size="12">70% and over</text>
+<rect x="468.84" y="766" width="30" height="6" rx="3" fill="#f85149"/>
+<text x="506.84" y="774" class="mut" font-size="12">90% and over</text>
+<text x="40" y="802" class="mut" font-size="12">Clocks drain at 1 s per hour of window: a 5 h window empties every 5 s, 7 days every 168 s, 90 days every 2160 s.</text>
+</svg>

@@ -5,61 +5,76 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>UsageTracker</title>
 <style>
+  /* Monad style reference: parchment canvas, serif display at weight 400,
+     mono for every functional string, ash hairlines, pill containers, no
+     shadows. Lake blue is spent once, on the primary action. The bar trio
+     (ok/warn/bad) is functional and kept as is. */
   :root {
-    --bg: #f6f6f4; --card: #ffffff; --fg: #1a1a1a; --muted: #6b6b6b; --line: #e4e4e0;
-    --ok: #2f9e5f; --warn: #d9932c; --bad: #d64545; --track: #ececea;
-    --claude: #c96a3a; --codex: #3b6fd6;
+    --bg: #f6f3f1; --card: #f6f3f1; --raised: #cfdaf5; --fg: #242424; --body: #4e4d4d; --muted: #797776; --line: #cecac8;
+    --ok: #2f9e5f; --warn: #d9932c; --bad: #d64545; --track: #e6e1dd;
+    --claude: #c96a3a; --codex: #2b59d1; --accent: #2b59d1;
+    --mono: "ABC Diatype Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+    --serif: "Untitled Serif", ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #131313; --card: #1c1c1c; --fg: #ececec; --muted: #9a9a9a; --line: #2a2a2a; --track: #2a2a2a; }
+    :root { --bg: #1c1b1a; --card: #242424; --raised: #3b4a6b; --fg: #f6f3f1; --body: #d9d4d0; --muted: #a29e9b; --line: #4e4d4d; --track: #3a3938; --codex: #7d9df0; }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 22px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { display: flex; align-items: baseline; gap: 24px; padding: 32px 40px 12px; }
-  header h1 { font-size: 32px; margin: 0; font-weight: 600; }
-  header .meta { color: var(--muted); font-size: 20px; }
-  header button { margin-left: auto; background: transparent; border: 1px solid var(--line); color: var(--fg); border-radius: 8px; padding: 10px 20px; cursor: pointer; font: inherit; }
-  header button:hover { border-color: var(--muted); }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr !important; } }
-  main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; padding: 20px 40px 48px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 28px 32px; display: flex; flex-direction: column; gap: 20px; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 400 18px/1.35 var(--mono); letter-spacing: -0.02em; }
+  header { display: flex; align-items: baseline; gap: 24px; padding: 40px 40px 16px; max-width: 1432px; margin: 0 auto; }
+  header h1 { font: 400 40px/1.2 var(--serif); letter-spacing: -0.02em; margin: 0; }
+  header .meta { color: var(--muted); font-size: 14px; text-transform: uppercase; letter-spacing: -0.02em; }
+  button { font: 500 14px/1 var(--mono); text-transform: uppercase; letter-spacing: -0.02em; border-radius: 100px; padding: 14px 28px; cursor: pointer; }
+  header #refresh { margin-left: auto; background: var(--accent); color: #f6f3f1; border: 1px solid var(--accent); }
+  header #refresh:disabled { opacity: .5; cursor: default; }
+  .days { display: flex; gap: 8px; }
+  .days button { background: transparent; border: 1px solid var(--line); color: var(--body); padding: 12px 20px; }
+  .days button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  #tokens, main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding: 16px 40px 0; max-width: 1432px; margin: 0 auto; }
+  main { padding-bottom: 64px; }
+  @media (max-width: 900px) { #tokens, main { grid-template-columns: 1fr; } }
+  .card, .tokens { background: var(--card); border: 1px solid var(--line); border-radius: 40px; padding: 40px; }
+  .card { display: flex; flex-direction: column; gap: 20px; }
   .card.err { border-color: var(--bad); }
-  .top { display: flex; align-items: center; gap: 10px; }
-  .dot { width: 16px; height: 16px; border-radius: 50%; flex: none; }
+  .top { display: flex; align-items: baseline; gap: 12px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; align-self: center; }
   .dot.claude { background: var(--claude); } .dot.codex { background: var(--codex); }
-  .name { font-weight: 600; font-size: 28px; }
-  .plan { color: var(--muted); font-size: 20px; margin-left: auto; text-align: right; }
-  .win { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: baseline; }
-  .win .label { font-size: 20px; color: var(--muted); }
-  .win .pct { font-variant-numeric: tabular-nums; font-weight: 600; }
-  .bar { grid-column: 1 / -1; height: 14px; margin: 4px 0; background: var(--track); border-radius: 4px; overflow: hidden; }
-  .bar > i { display: block; height: 100%; border-radius: 4px; background: var(--ok); transition: width .4s; }
+  .name { font: 400 32px/1.2 var(--serif); letter-spacing: -0.02em; }
+  .plan { color: var(--muted); font-size: 14px; margin-left: auto; text-align: right; text-transform: uppercase; }
+  .win { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: baseline; }
+  .win .label { font-size: 16px; color: var(--body); }
+  .win .pct { font-variant-numeric: tabular-nums; font-weight: 500; font-size: 20px; }
+  .bar { grid-column: 1 / -1; height: 10px; margin: 4px 0; background: var(--track); border-radius: 100px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; border-radius: 100px; background: var(--ok); transition: width .4s; }
   .bar.warn > i { background: var(--warn); } .bar.bad > i { background: var(--bad); }
-  .reset { grid-column: 1 / -1; font-size: 19px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .notes, .warnings, .error { font-size: 19px; }
+  .reset { grid-column: 1 / -1; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .notes, .warnings, .error { font-size: 14px; }
   .notes { color: var(--muted); } .warnings { color: var(--warn); } .error { color: var(--bad); white-space: pre-wrap; word-break: break-word; }
-  .foot { margin-top: auto; font-size: 17px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+  .foot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; text-transform: uppercase; }
   .stale { color: var(--warn); }
-  code { font-family: ui-monospace, Consolas, monospace; font-size: 16px; }
-  .days { display: flex; gap: 4px; }
-  .days button { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 8px; padding: 6px 14px; cursor: pointer; font: inherit; font-size: 18px; }
-  .days button.on { color: var(--fg); border-color: var(--fg); }
-  #tokens { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; padding: 20px 40px 0; }
-  @media (max-width: 900px) { #tokens { grid-template-columns: 1fr; } }
-  .tokens { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 24px 32px; display: grid; gap: 6px; }
-  .tokens .head .name { font-size: 24px; }
-  .tokens .head .dot { margin-right: 10px; }
-  .tokens .note { font-size: 17px; color: var(--muted); }
+  code { font-family: inherit; font-size: inherit; text-transform: none; }
+  .tokens { display: grid; gap: 8px; }
   .tokens .head { display: flex; align-items: baseline; gap: 12px; }
-  .tokens .head .label { color: var(--muted); font-size: 20px; }
-  .tokens .head .total { font-weight: 600; font-variant-numeric: tabular-nums; margin-left: auto; }
-  .tokens .split, .tokens .models, .tokens .cost { font-size: 19px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .tokens .cost b { color: var(--fg); font-weight: 600; }
-  .strip { display: flex; align-items: flex-end; gap: 2px; height: 44px; margin-top: 6px; }
-  .strip i { flex: 1; background: var(--codex); opacity: .55; border-radius: 2px 2px 0 0; min-height: 1px; }
+  .tokens .head .name { font-size: 24px; }
+  .tokens .head .dot { margin-right: 4px; }
+  .tokens .head .total { font-weight: 500; font-size: 28px; font-variant-numeric: tabular-nums; margin-left: auto; }
+  .tokens .row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+  .tokens .row .hd { font-size: 12px; color: var(--muted); text-transform: uppercase; width: 64px; flex: none; }
+  .stack { display: flex; flex: 1; height: 12px; border-radius: 100px; overflow: hidden; background: var(--track); gap: 2px; }
+  .stack i { display: block; height: 100%; min-width: 2px; background: var(--hue); cursor: default; }
+  .stack i:hover, .stack i:focus-visible { filter: brightness(.85); outline: none; }
+  .strip i:focus-visible { opacity: 1; outline: none; }
+  .tokens .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--muted); padding-left: 76px; }
+  .tokens .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--sw); margin-right: 6px; vertical-align: -1px; }
+  .tokens[data-kind="claude"] { --hue: var(--claude); } .tokens[data-kind="codex"] { --hue: var(--codex); }
+  .tokens .foot { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); text-transform: uppercase; }
+  .tokens .foot .pill { border: 1px solid var(--line); border-radius: 100px; padding: 6px 12px; color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .tokens .foot .pill.warn { color: var(--warn); }
+  .strip { display: flex; align-items: flex-end; gap: 3px; height: 56px; margin-top: 12px; }
+  .strip i { flex: 1; background: var(--hue); opacity: .6; border-radius: 100px 100px 0 0; min-height: 2px; cursor: default; }
+  .strip i:hover { opacity: 1; }
   .strip i.zero { background: var(--track); opacity: 1; }
-  .tokens[data-kind="claude"] .strip i { background: var(--claude); }
-  .tokens[data-kind="claude"] .strip i.zero { background: var(--track); }
+  #tip { position: fixed; z-index: 10; pointer-events: none; display: none; background: var(--fg); color: var(--bg); font: 400 13px/1.35 var(--mono); padding: 8px 12px; border-radius: 100px; white-space: nowrap; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -70,6 +85,7 @@
   <button id="refresh">Refresh now</button>
 </header>
 <section id="tokens"></section>
+<div id="tip"></div>
 <main id="main"></main>
 <script>
   const $ = (s) => document.querySelector(s);
@@ -99,23 +115,43 @@
   function usd(n) { return n >= 100 ? "$" + Math.round(n) : "$" + n.toFixed(2); }
 
   const KIND = { claude: "Claude Code", codex: "Codex" };
+  // Stacked bar: segments proportional to `parts` [{label, value, alpha}], numbers live in the tooltip.
+  function stack(parts, total, unit) {
+    const seg = parts.filter((p) => p.value > 0).map((p) =>
+      `<i style="flex:${p.value};opacity:${p.alpha}" tabindex="0" role="img" aria-label="${esc(p.label)} · ${unit(p.value)} · ${(p.value / total * 100).toFixed(1)}%" data-tip="${esc(p.label)} · ${unit(p.value)} · ${(p.value / total * 100).toFixed(1)}%"></i>`).join("");
+    const legend = parts.filter((p) => p.value > 0).map((p) =>
+      `<span style="--sw:color-mix(in srgb, var(--hue) ${Math.round(p.alpha * 100)}%, var(--track))">${esc(p.label)}</span>`).join("");
+    return { seg, legend };
+  }
   function tokensBlock(t) {
     const head = `<div class="head"><span class="dot ${esc(t.kind)}"></span><span class="name">${KIND[t.kind]} tokens, last ${t.days}d</span>`;
     if (!t.files) return `<div class="tokens" data-kind="${esc(t.kind)}">${head}<span class="total">no transcripts</span></div></div>`;
     const max = Math.max(1, ...t.series.map((d) => d.total));
-    const strip = t.series.map((d) => `<i class="${d.total ? "" : "zero"}" style="height:${Math.max(2, Math.round(d.total / max * 100))}%" title="${d.day}: ${fmt(d.total)}${d.costUsd ? " · " + usd(d.costUsd) : ""}"></i>`).join("");
-    const models = Object.entries(t.byModel).sort((a, b) => b[1].total - a[1].total).slice(0, 3)
-      .map(([m, v]) => `${esc(m.replace(/-\d{8}$/, ""))} ${fmt(v.total)}`).join(" · ");
-    const cost = t.costUsd || t.unpriced
-      ? `<div class="cost">${t.costUsd ? `<b>${usd(t.costUsd)}</b> API-equivalent` : ""}${t.unpriced ? `${t.costUsd ? ", " : ""}${fmt(t.unpriced)} tokens unpriced` : ""}</div>` : "";
+    const day = (d) => new Date(d.day + "T00:00").toLocaleDateString([], { month: "short", day: "numeric" });
+    const strip = t.series.map((d) => `<i class="${d.total ? "" : "zero"}" style="height:${Math.max(2, Math.round(d.total / max * 100))}%" tabindex="0" role="img" aria-label="${day(d)} · ${fmt(d.total)}${d.costUsd ? " · " + usd(d.costUsd) : ""}" data-tip="${day(d)} · ${fmt(d.total)}${d.costUsd ? " · " + usd(d.costUsd) : ""}"></i>`).join("");
+    const split = stack([
+      { label: "input", value: t.uncachedIn, alpha: 1 }, { label: "cache read", value: t.cachedIn, alpha: .45 },
+      { label: "cache write", value: t.cacheWrite, alpha: .25 }, { label: "output", value: t.out, alpha: .7 },
+    ], t.total, fmt);
+    const top = Object.entries(t.byModel).sort((a, b) => b[1].total - a[1].total);
+    const alphas = [1, .6, .35, .18];
+    const parts = top.slice(0, 3).map(([m, v], i) => ({ label: m.replace(/-\d{8}$/, ""), value: v.total, alpha: alphas[i] }));
+    const rest = top.slice(3).reduce((n, [, v]) => n + v.total, 0);
+    if (rest) parts.push({ label: `${top.length - 3} other`, value: rest, alpha: alphas[3] });
+    const models = stack(parts, t.total, fmt);
     return `
       <div class="tokens" data-kind="${esc(t.kind)}">
         ${head}<span class="total">${fmt(t.total)}</span></div>
-        <div class="split">in ${fmt(t.uncachedIn)} · cached ${fmt(t.cachedIn)} · cache write ${fmt(t.cacheWrite)} · out ${fmt(t.out)}</div>
-        ${cost}
-        ${models ? `<div class="models">${models}</div>` : ""}
+        <div class="row"><span class="hd">split</span><div class="stack">${split.seg}</div></div>
+        <div class="legend">${split.legend}</div>
+        <div class="row"><span class="hd">models</span><div class="stack">${models.seg}</div></div>
+        <div class="legend">${models.legend}</div>
         <div class="strip">${strip}</div>
-        <div class="note">all accounts on this machine, from <code>${t.dirs.map(esc).join("</code>, <code>")}</code></div>
+        <div class="foot">
+          ${t.costUsd ? `<span class="pill" data-tip="same traffic at public API rates, LiteLLM table">${usd(t.costUsd)} API-equivalent</span>` : ""}
+          ${t.unpriced ? `<span class="pill warn" data-tip="no price for these models; add priceAliases in accounts.json">${fmt(t.unpriced)} unpriced</span>` : ""}
+          <span data-tip="${esc(t.dirs.join(" · "))}">all accounts on this machine</span>
+        </div>
       </div>`;
   }
 
@@ -165,6 +201,28 @@
     const ok = last.accounts.filter((a) => a.ok).length;
     $("#meta").textContent = `${ok}/${last.accounts.length} accounts live · ${new Date().toLocaleTimeString()}`;
   }
+  const tip = $("#tip");
+  document.addEventListener("pointerover", (e) => {
+    const el = e.target.closest("[data-tip]");
+    if (!el) { tip.style.display = "none"; return; }
+    tip.textContent = el.dataset.tip; tip.style.display = "block";
+  });
+  document.addEventListener("pointermove", (e) => {
+    if (tip.style.display !== "block") return;
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.min(e.clientX + 14, innerWidth - w - 8) + "px";
+    tip.style.top = (e.clientY - h - 14 < 0 ? e.clientY + 18 : e.clientY - h - 14) + "px";
+  });
+  document.addEventListener("pointerout", (e) => { if (e.target.closest("[data-tip]") && !e.relatedTarget?.closest?.("[data-tip]")) tip.style.display = "none"; });
+  // Keyboard: Tab onto a segment or day bar shows the same tooltip above it.
+  document.addEventListener("focusin", (e) => {
+    const el = e.target.closest("[data-tip]"); if (!el) return;
+    const r = el.getBoundingClientRect();
+    tip.textContent = el.dataset.tip; tip.style.display = "block";
+    tip.style.left = Math.min(r.left, innerWidth - tip.offsetWidth - 8) + "px";
+    tip.style.top = Math.max(8, r.top - tip.offsetHeight - 8) + "px";
+  });
+  document.addEventListener("focusout", (e) => { if (e.target.closest?.("[data-tip]")) tip.style.display = "none"; });
   $("#days").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
     days = Number(b.dataset.d);

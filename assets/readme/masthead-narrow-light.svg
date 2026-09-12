@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 852" width="390" height="852" role="img" aria-label="UsageTracker schedule board: 4 Claude Code rate-limit windows polled every 180 seconds, 2 Codex windows polled every 60 seconds, token totals over 7, 30 and 90 days rescanned every 300 seconds, and one write, the Claude token refresh.">
+<style>
+.ttl{font-family:'Untitled Serif',ui-serif,Georgia,Cambria,'Times New Roman',Times,serif;font-weight:400;fill:#242424;letter-spacing:-0.02em}
+.lbl{font-family:'ABC Diatype Mono','JetBrains Mono','IBM Plex Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;fill:#242424;letter-spacing:-0.02em}
+.bdy{font-family:'ABC Diatype Mono','JetBrains Mono','IBM Plex Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;fill:#4e4d4d;letter-spacing:-0.02em}
+.mut{font-family:'ABC Diatype Mono','JetBrains Mono','IBM Plex Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;fill:#797776;letter-spacing:-0.02em}
+.hd{font-family:'ABC Diatype Mono','JetBrains Mono','IBM Plex Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;fill:#797776;letter-spacing:0.08em}
+.num{font-family:'ABC Diatype Mono','JetBrains Mono','IBM Plex Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;fill:#242424;font-variant-numeric:tabular-nums}
+.rule{stroke:#cecac8;stroke-width:1}
+.card{fill:#f6f3f1;stroke:#cecac8;stroke-width:1}
+.pill{fill:none;stroke:#cecac8;stroke-width:1}
+.face{fill:none;stroke:#e6e1dd;stroke-width:3}
+.hand{fill:none;stroke:#242424;stroke-width:3;stroke-dasharray:50.27;stroke-dashoffset:0;animation-name:drain;animation-timing-function:linear;animation-iteration-count:infinite}
+@keyframes drain{from{stroke-dashoffset:0}to{stroke-dashoffset:50.27}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}.hand{stroke-dashoffset:0}}</style>
+<defs><filter id="w" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="28"/></filter><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#ff9473" stop-opacity="0.55"/><stop offset="1" stop-color="#a0b5eb" stop-opacity="0.55"/></linearGradient><clipPath id="c"><rect x="0.5" y="0.5" width="389" height="851" rx="24"/></clipPath></defs>
+<rect x="0.5" y="0.5" width="389" height="851" rx="24" class="card"/>
+<g clip-path="url(#c)"><ellipse cx="350" cy="30" rx="120" ry="60" fill="url(#g)" filter="url(#w)"/></g>
+<text x="24" y="64" class="ttl" font-size="36">UsageTracker</text>
+<text x="24" y="94" class="bdy" font-size="13">Rate-limit windows, reset clocks and token</text>
+<text x="24" y="113.5" class="bdy" font-size="13">totals for every Claude Code and Codex</text>
+<text x="24" y="133" class="bdy" font-size="13">account on this machine, on one local page.</text>
+<rect x="24" y="150.5" width="83.4" height="23" rx="17" class="pill"/><text x="36" y="166.5" class="mut" font-size="11">READ-ONLY</text>
+<rect x="115.4" y="150.5" width="116.39999999999999" height="23" rx="17" class="pill"/><text x="127.4" y="166.5" class="mut" font-size="11">127.0.0.1:4545</text>
+<rect x="239.8" y="150.5" width="116.39999999999999" height="23" rx="17" class="pill"/><text x="251.8" y="166.5" class="mut" font-size="11">0 DEPENDENCIES</text>
+<text x="24" y="206.5" text-anchor="start" class="hd" font-size="11">WINDOW</text>
+<text x="236" y="206.5" text-anchor="start" class="hd" font-size="11">LENGTH</text>
+<text x="366" y="206.5" text-anchor="end" class="hd" font-size="11">POLLED</text>
+<line x1="24" x2="366" y1="216.5" y2="216.5" class="rule"/>
+<circle cx="29" cy="243.5" r="5" fill="#c96a3a"/>
+<text x="42" y="248.5" class="lbl" font-size="13">Claude Code</text>
+<text x="366" y="248.5" text-anchor="end" class="mut" font-size="11">api.anthropic.com</text>
+<text x="24" y="288.5" class="lbl" font-size="13">Session (5h)</text>
+<g transform="rotate(-90 244 283.5)"><circle cx="244" cy="283.5" r="8" class="face"/><circle cx="244" cy="283.5" r="8" class="hand" style="animation-duration:5s"/></g>
+<text x="260" y="288.5" class="num" font-size="12">5 h</text>
+<text x="366" y="288.5" text-anchor="end" class="num" font-size="12">180 s</text>
+<line x1="24" x2="366" y1="302.5" y2="302.5" class="rule"/>
+<text x="24" y="328.5" class="lbl" font-size="13">Weekly</text>
+<g transform="rotate(-90 244 323.5)"><circle cx="244" cy="323.5" r="8" class="face"/><circle cx="244" cy="323.5" r="8" class="hand" style="animation-duration:168s"/></g>
+<text x="260" y="328.5" class="num" font-size="12">7 d</text>
+<text x="366" y="328.5" text-anchor="end" class="num" font-size="12">180 s</text>
+<line x1="24" x2="366" y1="342.5" y2="342.5" class="rule"/>
+<text x="24" y="368.5" class="lbl" font-size="13">Weekly Opus</text>
+<g transform="rotate(-90 244 363.5)"><circle cx="244" cy="363.5" r="8" class="face"/><circle cx="244" cy="363.5" r="8" class="hand" style="animation-duration:168s"/></g>
+<text x="260" y="368.5" class="num" font-size="12">7 d</text>
+<text x="366" y="368.5" text-anchor="end" class="num" font-size="12">180 s</text>
+<line x1="24" x2="366" y1="382.5" y2="382.5" class="rule"/>
+<text x="24" y="408.5" class="lbl" font-size="13">Weekly Sonnet</text>
+<g transform="rotate(-90 244 403.5)"><circle cx="244" cy="403.5" r="8" class="face"/><circle cx="244" cy="403.5" r="8" class="hand" style="animation-duration:168s"/></g>
+<text x="260" y="408.5" class="num" font-size="12">7 d</text>
+<text x="366" y="408.5" text-anchor="end" class="num" font-size="12">180 s</text>
+<line x1="24" x2="366" y1="422.5" y2="422.5" class="rule"/>
+<circle cx="29" cy="435.5" r="5" fill="#2b59d1"/>
+<text x="42" y="440.5" class="lbl" font-size="13">Codex</text>
+<text x="366" y="440.5" text-anchor="end" class="mut" font-size="11">chatgpt.com</text>
+<text x="24" y="480.5" class="lbl" font-size="13">Session (5h)</text>
+<g transform="rotate(-90 244 475.5)"><circle cx="244" cy="475.5" r="8" class="face"/><circle cx="244" cy="475.5" r="8" class="hand" style="animation-duration:5s"/></g>
+<text x="260" y="480.5" class="num" font-size="12">5 h</text>
+<text x="366" y="480.5" text-anchor="end" class="num" font-size="12">60 s</text>
+<line x1="24" x2="366" y1="494.5" y2="494.5" class="rule"/>
+<text x="24" y="520.5" class="lbl" font-size="13">Weekly</text>
+<g transform="rotate(-90 244 515.5)"><circle cx="244" cy="515.5" r="8" class="face"/><circle cx="244" cy="515.5" r="8" class="hand" style="animation-duration:168s"/></g>
+<text x="260" y="520.5" class="num" font-size="12">7 d</text>
+<text x="366" y="520.5" text-anchor="end" class="num" font-size="12">60 s</text>
+<line x1="24" x2="366" y1="534.5" y2="534.5" class="rule"/>
+<text x="24" y="552.5" class="lbl" font-size="13">Tokens</text>
+<text x="366" y="552.5" text-anchor="end" class="mut" font-size="11">local transcripts</text>
+<text x="24" y="592.5" class="lbl" font-size="13">Last 7 / 30 / 90 d</text>
+<text x="366" y="592.5" text-anchor="end" class="num" font-size="12">300 s</text>
+<g transform="rotate(-90 32 611.5)"><circle cx="32" cy="611.5" r="8" class="face"/><circle cx="32" cy="611.5" r="8" class="hand" style="animation-duration:168s"/></g>
+<text x="48" y="616.5" class="num" font-size="12">7 d</text>
+<g transform="rotate(-90 91.6 611.5)"><circle cx="91.6" cy="611.5" r="8" class="face"/><circle cx="91.6" cy="611.5" r="8" class="hand" style="animation-duration:720s"/></g>
+<text x="107.6" y="616.5" class="num" font-size="12">30 d</text>
+<g transform="rotate(-90 158.39999999999998 611.5)"><circle cx="158.39999999999998" cy="611.5" r="8" class="face"/><circle cx="158.39999999999998" cy="611.5" r="8" class="hand" style="animation-duration:2160s"/></g>
+<text x="174.39999999999998" y="616.5" class="num" font-size="12">90 d</text>
+<line x1="24" x2="366" y1="630.5" y2="630.5" class="rule"/>
+<text x="24" y="656.5" class="lbl" font-size="13">Claude token refresh</text>
+<text x="366" y="656.5" text-anchor="end" class="num" font-size="12">on expiry</text>
+<text x="24" y="680.5" class="mut" font-size="11">the only write</text>
+<line x1="24" x2="366" y1="694.5" y2="694.5" class="rule"/>
+<line x1="24" x2="366" y1="704.5" y2="704.5" class="rule"/>
+<text x="24" y="730.5" class="hd" font-size="11">DASHBOARD BARS</text>
+<rect x="24" y="744.5" width="20" height="6" rx="3" fill="#2f9e5f"/>
+<text x="50" y="752.5" class="mut" font-size="11">under 70% used</text>
+<rect x="152.39999999999998" y="744.5" width="20" height="6" rx="3" fill="#d9932c"/>
+<text x="178.39999999999998" y="752.5" class="mut" font-size="11">70% and over</text>
+<rect x="267.59999999999997" y="744.5" width="20" height="6" rx="3" fill="#d64545"/>
+<text x="293.59999999999997" y="752.5" class="mut" font-size="11">90% and over</text>
+<text x="24" y="778.5" class="mut" font-size="11">Clocks drain at 1 s per hour of window: a 5 h</text>
+<text x="24" y="795" class="mut" font-size="11">window empties every 5 s, 7 days every 168 s, 90</text>
+<text x="24" y="811.5" class="mut" font-size="11">days every 2160 s.</text>
+</svg>
