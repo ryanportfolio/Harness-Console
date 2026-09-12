@@ -22,3 +22,5 @@ build/
 Thumbs.db
 .DS_Store
 debug.log
+.state/
+node_modules/
