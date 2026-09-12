@@ -8,8 +8,9 @@ const RATES_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_
 const TTL_MS = 24 * 3600 * 1000;
 
 export class Pricing {
-  constructor(cacheFile, writeAtomic, log) {
+  constructor(cacheFile, writeAtomic, log, aliases = {}) {
     this.cacheFile = cacheFile;
+    this.aliases = aliases; // model -> model whose rate to use (for names LiteLLM lacks)
     this.writeAtomic = writeAtomic;
     this.log = log;
     this.rates = new Map(); // model -> { in, out, cr, cw, cw1h } USD per token
@@ -58,11 +59,12 @@ export class Pricing {
     this.lookup.clear();
   }
 
-  // Exact key first, then any provider-prefixed key ("anthropic/<model>").
+  // Configured alias first, then exact key, then any provider-prefixed key ("anthropic/<model>").
   rate(model) {
     if (this.lookup.has(model)) return this.lookup.get(model);
-    let r = this.rates.get(model) ?? null;
-    if (!r) for (const [k, v] of this.rates) if (k.endsWith(`/${model}`)) { r = v; break; }
+    const key = this.aliases[model] ?? model;
+    let r = this.rates.get(key) ?? null;
+    if (!r) for (const [k, v] of this.rates) if (k.endsWith(`/${key}`)) { r = v; break; }
     this.lookup.set(model, r);
     return r;
   }

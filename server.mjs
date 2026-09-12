@@ -372,7 +372,7 @@ for (const acct of config.accounts) {
 // ---------- tokens ----------
 
 await mkdir(path.join(STATE_DIR, "tokens"), { recursive: true });
-const pricing = new Pricing(path.join(STATE_DIR, "pricing.json"), writeAtomic, log);
+const pricing = new Pricing(path.join(STATE_DIR, "pricing.json"), writeAtomic, log, config.priceAliases ?? {});
 await pricing.load();
 // One scanner per distinct transcript dir. Accounts that share a dir (logging
 // out and back in with another email) cannot be told apart in the transcripts,
