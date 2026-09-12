@@ -86,7 +86,7 @@ The vendor calls are not documented public APIs. They are the same calls the CLI
 
 ## README
 
-\`README.md\` and \`assets/readme/*.svg\` are generated: \`node scripts/readme/build.mjs\` reads the numbers out of the source files and fails if any drift. Edit \`scripts/readme/\`, not the output.
+\`README.md\` and \`assets/readme/*.svg\` are generated: \`node scripts/readme/build.mjs\` reads the numbers out of the source files and fails if any drift. Edit \`scripts/readme/\`, not the output. The repo's About panel (description and topics) comes from \`scripts/readme/repo.json\`; \`node scripts/readme/meta.mjs --apply\` pushes it, and after a merge CI fails when the live values or the README's remote links no longer answer.
 
 ## License
 

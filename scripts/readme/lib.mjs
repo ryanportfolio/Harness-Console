@@ -51,3 +51,6 @@ export function picture(base, alt) {
 <img alt="${esc(alt)}" src="assets/readme/${base}-light.svg" width="100%">
 </picture>`;
 }
+
+// Every link target in a markdown file: `](url)` and `src="url"`, deduplicated.
+export const readmeLinks = (text) => [...new Set([...text.matchAll(/\]\(([^)\s]+)\)|src="([^"]+)"/g)].map((m) => m[1] ?? m[2]))];

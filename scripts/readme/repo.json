@@ -1,0 +1,15 @@
+{
+  "description": "One local page for every Claude Code and Codex account on this machine: rate-limit windows, reset clocks, and token totals over 7, 30 or 90 days. Node only, no dependencies.",
+  "homepage": "",
+  "topics": [
+    "claude-code",
+    "codex",
+    "openai-codex",
+    "anthropic",
+    "rate-limits",
+    "token-usage",
+    "usage-dashboard",
+    "nodejs",
+    "local-first"
+  ]
+}
