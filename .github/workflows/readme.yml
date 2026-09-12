@@ -18,3 +18,7 @@ jobs:
           if [ -n "$(git status --porcelain -- README.md assets/readme)" ]; then
             echo "generated files missing from the commit:"; git status --porcelain -- README.md assets/readme; exit 1
           fi
+      - name: About panel matches repo.json
+        run: node scripts/readme/meta.mjs --check
+        env:
+          GH_TOKEN: ${{ github.token }}
