@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UsageTracker</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #ffffff; --fg: #1a1a1a; --muted: #6b6b6b; --line: #e4e4e0;
+    --ok: #2f9e5f; --warn: #d9932c; --bad: #d64545; --track: #ececea;
+    --claude: #c96a3a; --codex: #3b6fd6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #131313; --card: #1c1c1c; --fg: #ececec; --muted: #9a9a9a; --line: #2a2a2a; --track: #2a2a2a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 16px; padding: 20px 24px 8px; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  header button { margin-left: auto; background: transparent; border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 5px 12px; cursor: pointer; font: inherit; }
+  header button:hover { border-color: var(--muted); }
+  main { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; padding: 12px 24px 32px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+  .card.err { border-color: var(--bad); }
+  .top { display: flex; align-items: center; gap: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .dot.claude { background: var(--claude); } .dot.codex { background: var(--codex); }
+  .name { font-weight: 600; font-size: 15px; }
+  .plan { color: var(--muted); font-size: 12px; margin-left: auto; text-align: right; }
+  .win { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: baseline; }
+  .win .label { font-size: 12px; color: var(--muted); }
+  .win .pct { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .bar { grid-column: 1 / -1; height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; border-radius: 4px; background: var(--ok); transition: width .4s; }
+  .bar.warn > i { background: var(--warn); } .bar.bad > i { background: var(--bad); }
+  .reset { grid-column: 1 / -1; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .notes, .warnings, .error { font-size: 12px; }
+  .notes { color: var(--muted); } .warnings { color: var(--warn); } .error { color: var(--bad); white-space: pre-wrap; word-break: break-word; }
+  .foot { margin-top: auto; font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+  .stale { color: var(--warn); }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>UsageTracker</h1>
+  <span class="meta" id="meta">loading</span>
+  <button id="refresh">Refresh now</button>
+</header>
+<main id="main"></main>
+<script>
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  function ago(iso) {
+    if (!iso) return "";
+    const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+    return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m ago`;
+  }
+  function until(iso) {
+    if (!iso) return "";
+    const s = Math.round((Date.parse(iso) - Date.now()) / 1000);
+    if (s <= 0) return "resets now";
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+    const t = new Date(iso);
+    const clock = d >= 1 ? t.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return `resets in ${d ? d + "d " : ""}${h}h ${m}m (${clock})`;
+  }
+  function cls(p) { return p >= 90 ? "bad" : p >= 70 ? "warn" : ""; }
+
+  function card(a) {
+    const d = a.data;
+    const win = (w) => `
+      <div class="win">
+        <span class="label">${esc(w.label)}</span>
+        <span class="pct">${Math.round(w.usedPercent)}% used</span>
+        <div class="bar ${cls(w.usedPercent)}"><i style="width:${Math.min(100, Math.max(0, w.usedPercent))}%"></i></div>
+        <span class="reset">${esc(until(w.resetsAt))}</span>
+      </div>`;
+    const body = d
+      ? (d.windows.length ? d.windows.map(win).join("") : `<div class="notes">no active rate-limit window</div>`)
+        + (d.notes?.length ? `<div class="notes">${d.notes.map(esc).join("<br>")}</div>` : "")
+        + (d.warnings?.length ? `<div class="warnings">${d.warnings.map(esc).join("<br>")}</div>` : "")
+      : "";
+    const err = a.ok ? "" : `<div class="error">${esc(a.error)}</div>`;
+    const stale = !a.ok && d ? `<span class="stale">showing data from ${ago(a.lastGoodAt)}</span>` : `<span>${a.ok ? "fetched " + ago(a.fetchedAt) : ""}</span>`;
+    return `
+      <section class="card ${a.ok ? "" : "err"}">
+        <div class="top">
+          <span class="dot ${esc(a.kind)}"></span>
+          <span class="name">${esc(a.name)}</span>
+          <span class="plan">${esc(d?.plan ?? "")}${d?.email ? `<br>${esc(d.email)}` : ""}</span>
+        </div>
+        ${body}${err}
+        <div class="foot">${stale}<code>${esc(a.dir ?? "")}</code></div>
+      </section>`;
+  }
+
+  let last = null;
+  async function load() {
+    try {
+      const r = await fetch("/api/usage", { cache: "no-store" });
+      last = await r.json();
+      render();
+    } catch (e) {
+      $("#meta").textContent = `server unreachable: ${e.message}`;
+    }
+  }
+  function render() {
+    if (!last) return;
+    $("#main").innerHTML = last.accounts.map(card).join("");
+    const ok = last.accounts.filter((a) => a.ok).length;
+    $("#meta").textContent = `${ok}/${last.accounts.length} accounts live · ${new Date().toLocaleTimeString()}`;
+  }
+  $("#refresh").addEventListener("click", async () => {
+    $("#refresh").disabled = true;
+    try { await fetch("/api/refresh", { method: "POST" }); await load(); } finally { $("#refresh").disabled = false; }
+  });
+  load();
+  setInterval(load, 30_000);
+  setInterval(render, 15_000); // keep countdowns moving between fetches
+</script>
+</body>
+</html>
