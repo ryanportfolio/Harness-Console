@@ -62,7 +62,8 @@
   .tokens .row .hd { font-size: 12px; color: var(--muted); text-transform: uppercase; width: 64px; flex: none; }
   .stack { display: flex; flex: 1; height: 12px; border-radius: 100px; overflow: hidden; background: var(--track); gap: 2px; }
   .stack i { display: block; height: 100%; min-width: 2px; background: var(--hue); cursor: default; }
-  .stack i:hover { filter: brightness(.85); }
+  .stack i:hover, .stack i:focus-visible { filter: brightness(.85); outline: none; }
+  .strip i:focus-visible { opacity: 1; outline: none; }
   .tokens .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--muted); padding-left: 76px; }
   .tokens .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--sw); margin-right: 6px; vertical-align: -1px; }
   .tokens[data-kind="claude"] { --hue: var(--claude); } .tokens[data-kind="codex"] { --hue: var(--codex); }
@@ -117,7 +118,7 @@
   // Stacked bar: segments proportional to `parts` [{label, value, alpha}], numbers live in the tooltip.
   function stack(parts, total, unit) {
     const seg = parts.filter((p) => p.value > 0).map((p) =>
-      `<i style="flex:${p.value};opacity:${p.alpha}" data-tip="${esc(p.label)} · ${unit(p.value)} · ${(p.value / total * 100).toFixed(1)}%"></i>`).join("");
+      `<i style="flex:${p.value};opacity:${p.alpha}" tabindex="0" role="img" aria-label="${esc(p.label)} · ${unit(p.value)} · ${(p.value / total * 100).toFixed(1)}%" data-tip="${esc(p.label)} · ${unit(p.value)} · ${(p.value / total * 100).toFixed(1)}%"></i>`).join("");
     const legend = parts.filter((p) => p.value > 0).map((p) =>
       `<span style="--sw:color-mix(in srgb, var(--hue) ${Math.round(p.alpha * 100)}%, var(--track))">${esc(p.label)}</span>`).join("");
     return { seg, legend };
@@ -127,7 +128,7 @@
     if (!t.files) return `<div class="tokens" data-kind="${esc(t.kind)}">${head}<span class="total">no transcripts</span></div></div>`;
     const max = Math.max(1, ...t.series.map((d) => d.total));
     const day = (d) => new Date(d.day + "T00:00").toLocaleDateString([], { month: "short", day: "numeric" });
-    const strip = t.series.map((d) => `<i class="${d.total ? "" : "zero"}" style="height:${Math.max(2, Math.round(d.total / max * 100))}%" data-tip="${day(d)} · ${fmt(d.total)}${d.costUsd ? " · " + usd(d.costUsd) : ""}"></i>`).join("");
+    const strip = t.series.map((d) => `<i class="${d.total ? "" : "zero"}" style="height:${Math.max(2, Math.round(d.total / max * 100))}%" tabindex="0" role="img" aria-label="${day(d)} · ${fmt(d.total)}${d.costUsd ? " · " + usd(d.costUsd) : ""}" data-tip="${day(d)} · ${fmt(d.total)}${d.costUsd ? " · " + usd(d.costUsd) : ""}"></i>`).join("");
     const split = stack([
       { label: "input", value: t.uncachedIn, alpha: 1 }, { label: "cache read", value: t.cachedIn, alpha: .45 },
       { label: "cache write", value: t.cacheWrite, alpha: .25 }, { label: "output", value: t.out, alpha: .7 },
@@ -213,6 +214,15 @@
     tip.style.top = (e.clientY - h - 14 < 0 ? e.clientY + 18 : e.clientY - h - 14) + "px";
   });
   document.addEventListener("pointerout", (e) => { if (e.target.closest("[data-tip]") && !e.relatedTarget?.closest?.("[data-tip]")) tip.style.display = "none"; });
+  // Keyboard: Tab onto a segment or day bar shows the same tooltip above it.
+  document.addEventListener("focusin", (e) => {
+    const el = e.target.closest("[data-tip]"); if (!el) return;
+    const r = el.getBoundingClientRect();
+    tip.textContent = el.dataset.tip; tip.style.display = "block";
+    tip.style.left = Math.min(r.left, innerWidth - tip.offsetWidth - 8) + "px";
+    tip.style.top = Math.max(8, r.top - tip.offsetHeight - 8) + "px";
+  });
+  document.addEventListener("focusout", (e) => { if (e.target.closest?.("[data-tip]")) tip.style.display = "none"; });
   $("#days").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
     days = Number(b.dataset.d);

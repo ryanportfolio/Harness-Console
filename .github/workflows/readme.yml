@@ -13,4 +13,8 @@ jobs:
           node-version: 24
       - run: node scripts/readme/build.mjs
       - name: README and panels match the source
-        run: git diff --exit-code -- README.md assets/readme
+        run: |
+          git diff --exit-code -- README.md assets/readme
+          if [ -n "$(git status --porcelain -- README.md assets/readme)" ]; then
+            echo "generated files missing from the commit:"; git status --porcelain -- README.md assets/readme; exit 1
+          fi

@@ -21,10 +21,18 @@ export function collectFacts() {
   const pricing = read("pricing.mjs");
   const page = read("index.html");
 
-  const claudePollSeconds = num(server, /config\.claudePollSeconds \?\? (\d+)/, "claudePollSeconds");
-  const codexPollSeconds = num(server, /config\.codexPollSeconds \?\? (\d+)/, "codexPollSeconds");
-  const tokenScanSeconds = num(server, /config\.tokenScanSeconds \?\? (\d+)/, "tokenScanSeconds");
-  const port = num(server, /config\.port \?\? (\d+)/, "port");
+  // accounts.json is committed and the server reads it with `config.X ?? literal`,
+  // so the README states the effective value, not the fallback.
+  const config = JSON.parse(read("accounts.json"));
+  const configured = (key, fallback) => {
+    if (config[key] === undefined) return fallback;
+    if (!Number.isInteger(config[key]) || config[key] <= 0) throw new Error(`facts: accounts.json ${key} is not a positive integer`);
+    return config[key];
+  };
+  const claudePollSeconds = configured("claudePollSeconds", num(server, /config\.claudePollSeconds \?\? (\d+)/, "claudePollSeconds"));
+  const codexPollSeconds = configured("codexPollSeconds", num(server, /config\.codexPollSeconds \?\? (\d+)/, "codexPollSeconds"));
+  const tokenScanSeconds = configured("tokenScanSeconds", num(server, /config\.tokenScanSeconds \?\? (\d+)/, "tokenScanSeconds"));
+  const port = configured("port", num(server, /config\.port \?\? (\d+)/, "port"));
   const retentionDays = num(tokens, /RETENTION_MS = (\d+) \* 24 \* 3600 \* 1000/, "RETENTION_MS");
   const codexExpiryWarnHours = num(server, /CODEX_EXPIRY_WARN_MS = (\d+) \* 60 \* 60 \* 1000/, "CODEX_EXPIRY_WARN_MS");
   const pageFetchSeconds = num(page, /setInterval\(load, (\d+)_000\)/, "page fetch interval");
