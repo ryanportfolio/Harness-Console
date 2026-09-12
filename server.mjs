@@ -7,6 +7,8 @@ import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { TokenScanner } from "./tokens.mjs";
+import { Pricing } from "./pricing.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const execP = promisify(exec);
@@ -31,6 +33,7 @@ await mkdir(STATE_DIR, { recursive: true });
 const CLAUDE_POLL_MS = (config.claudePollSeconds ?? 180) * 1000; // /api/oauth/usage 429s below ~180s
 const CODEX_POLL_MS = (config.codexPollSeconds ?? 60) * 1000;
 const HTTP_TIMEOUT_MS = 15_000;
+const TOKEN_SCAN_MS = (config.tokenScanSeconds ?? 300) * 1000;
 
 // ---------- shared ----------
 
@@ -366,6 +369,57 @@ for (const acct of config.accounts) {
   schedule(acct);
 }
 
+// ---------- tokens ----------
+
+await mkdir(path.join(STATE_DIR, "tokens"), { recursive: true });
+const pricing = new Pricing(path.join(STATE_DIR, "pricing.json"), writeAtomic, log, config.priceAliases ?? {});
+await pricing.load();
+// One scanner per distinct transcript dir. Accounts that share a dir (logging
+// out and back in with another email) cannot be told apart in the transcripts,
+// so totals are reported per provider, not per account.
+const scanners = new Map();
+for (const a of config.accounts) {
+  const key = `${a.kind}:${a.dir.toLowerCase()}`;
+  if (scanners.has(key)) continue;
+  const file = path.join(STATE_DIR, "tokens", `${a.kind}-${a.dir.replace(/[^\w.-]+/g, "_")}.json`);
+  scanners.set(key, new TokenScanner({ name: `${a.kind} ${a.dir}`, kind: a.kind, dir: a.dir }, file, writeAtomic, log));
+}
+for (const s of scanners.values()) await s.load();
+
+async function scanAll() {
+  await pricing.refresh();
+  for (const s of scanners.values()) await s.scan();
+}
+(async function tokenTick() {
+  try { await scanAll(); } catch (e) { log(`tokens: scan failed: ${e.message ?? e}`); }
+  finally { setTimeout(tokenTick, TOKEN_SCAN_MS).unref?.(); }
+})();
+
+function tokensPayload(days) {
+  return {
+    now: new Date().toISOString(),
+    pricing: { status: pricing.status, fetchedAt: pricing.fetchedAt ? new Date(pricing.fetchedAt).toISOString() : null },
+    providers: ["claude", "codex"].map((kind) => mergeSummaries(kind, [...scanners.values()].filter((s) => s.acct.kind === kind).map((s) => ({ dir: s.acct.dir, ...s.summary(days, pricing) })))),
+  };
+}
+
+function mergeSummaries(kind, parts) {
+  const out = { kind, dirs: parts.map((p) => p.dir), days: parts[0]?.days ?? 0, uncachedIn: 0, cachedIn: 0, cacheWrite: 0, out: 0, reasoning: 0, total: 0, costUsd: 0, unpriced: 0, byModel: {}, series: [], files: 0, lastScanAt: null };
+  for (const p of parts) {
+    for (const k of ["uncachedIn", "cachedIn", "cacheWrite", "out", "reasoning", "total", "costUsd", "unpriced", "files"]) out[k] += p[k];
+    for (const [m, v] of Object.entries(p.byModel)) {
+      const b = out.byModel[m] ??= { total: 0, costUsd: 0 };
+      b.total += v.total; b.costUsd += v.costUsd;
+    }
+    p.series.forEach((d, i) => {
+      const s = out.series[i] ??= { day: d.day, total: 0, costUsd: 0 };
+      s.total += d.total; s.costUsd += d.costUsd;
+    });
+    if (p.lastScanAt && (!out.lastScanAt || p.lastScanAt > out.lastScanAt)) out.lastScanAt = p.lastScanAt;
+  }
+  return out;
+}
+
 // ---------- http ----------
 
 const indexHtml = await readFile(path.join(here, "index.html"), "utf8");
@@ -377,8 +431,14 @@ createServer((req, res) => {
     res.end(JSON.stringify({ now: new Date().toISOString(), accounts: config.accounts.map((a) => snapshots.get(a.name) ?? { name: a.name, kind: a.kind, ok: false, error: "not fetched yet" }) }));
     return;
   }
+  if (url.pathname === "/api/tokens") {
+    const days = Math.min(365, Math.max(1, Number(url.searchParams.get("days")) || 30));
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify(tokensPayload(days)));
+    return;
+  }
   if (url.pathname === "/api/refresh" && req.method === "POST") {
-    Promise.all(config.accounts.map(pollOnce)).then(() => { res.writeHead(204); res.end(); });
+    Promise.all([...config.accounts.map(pollOnce), scanAll().catch((e) => log(`tokens: scan failed: ${e.message ?? e}`))]).then(() => { res.writeHead(204); res.end(); });
     return;
   }
   if (url.pathname === "/") {

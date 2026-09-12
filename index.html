@@ -41,14 +41,35 @@
   .foot { margin-top: auto; font-size: 17px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
   .stale { color: var(--warn); }
   code { font-family: ui-monospace, Consolas, monospace; font-size: 16px; }
+  .days { display: flex; gap: 4px; }
+  .days button { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 8px; padding: 6px 14px; cursor: pointer; font: inherit; font-size: 18px; }
+  .days button.on { color: var(--fg); border-color: var(--fg); }
+  #tokens { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; padding: 20px 40px 0; }
+  @media (max-width: 900px) { #tokens { grid-template-columns: 1fr; } }
+  .tokens { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 24px 32px; display: grid; gap: 6px; }
+  .tokens .head .name { font-size: 24px; }
+  .tokens .head .dot { margin-right: 10px; }
+  .tokens .note { font-size: 17px; color: var(--muted); }
+  .tokens .head { display: flex; align-items: baseline; gap: 12px; }
+  .tokens .head .label { color: var(--muted); font-size: 20px; }
+  .tokens .head .total { font-weight: 600; font-variant-numeric: tabular-nums; margin-left: auto; }
+  .tokens .split, .tokens .models, .tokens .cost { font-size: 19px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tokens .cost b { color: var(--fg); font-weight: 600; }
+  .strip { display: flex; align-items: flex-end; gap: 2px; height: 44px; margin-top: 6px; }
+  .strip i { flex: 1; background: var(--codex); opacity: .55; border-radius: 2px 2px 0 0; min-height: 1px; }
+  .strip i.zero { background: var(--track); opacity: 1; }
+  .tokens[data-kind="claude"] .strip i { background: var(--claude); }
+  .tokens[data-kind="claude"] .strip i.zero { background: var(--track); }
 </style>
 </head>
 <body>
 <header>
   <h1>UsageTracker</h1>
   <span class="meta" id="meta">loading</span>
+  <span class="days" id="days"><button data-d="7">7d</button><button data-d="30" class="on">30d</button><button data-d="90">90d</button></span>
   <button id="refresh">Refresh now</button>
 </header>
+<section id="tokens"></section>
 <main id="main"></main>
 <script>
   const $ = (s) => document.querySelector(s);
@@ -69,6 +90,34 @@
     return `resets in ${d ? d + "d " : ""}${h}h ${m}m (${clock})`;
   }
   function cls(p) { return p >= 90 ? "bad" : p >= 70 ? "warn" : ""; }
+  function fmt(n) {
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(0) + "k";
+    return String(n);
+  }
+  function usd(n) { return n >= 100 ? "$" + Math.round(n) : "$" + n.toFixed(2); }
+
+  const KIND = { claude: "Claude Code", codex: "Codex" };
+  function tokensBlock(t) {
+    const head = `<div class="head"><span class="dot ${esc(t.kind)}"></span><span class="name">${KIND[t.kind]} tokens, last ${t.days}d</span>`;
+    if (!t.files) return `<div class="tokens" data-kind="${esc(t.kind)}">${head}<span class="total">no transcripts</span></div></div>`;
+    const max = Math.max(1, ...t.series.map((d) => d.total));
+    const strip = t.series.map((d) => `<i class="${d.total ? "" : "zero"}" style="height:${Math.max(2, Math.round(d.total / max * 100))}%" title="${d.day}: ${fmt(d.total)}${d.costUsd ? " · " + usd(d.costUsd) : ""}"></i>`).join("");
+    const models = Object.entries(t.byModel).sort((a, b) => b[1].total - a[1].total).slice(0, 3)
+      .map(([m, v]) => `${esc(m.replace(/-\d{8}$/, ""))} ${fmt(v.total)}`).join(" · ");
+    const cost = t.costUsd || t.unpriced
+      ? `<div class="cost">${t.costUsd ? `<b>${usd(t.costUsd)}</b> API-equivalent` : ""}${t.unpriced ? `${t.costUsd ? ", " : ""}${fmt(t.unpriced)} tokens unpriced` : ""}</div>` : "";
+    return `
+      <div class="tokens" data-kind="${esc(t.kind)}">
+        ${head}<span class="total">${fmt(t.total)}</span></div>
+        <div class="split">in ${fmt(t.uncachedIn)} · cached ${fmt(t.cachedIn)} · cache write ${fmt(t.cacheWrite)} · out ${fmt(t.out)}</div>
+        ${cost}
+        ${models ? `<div class="models">${models}</div>` : ""}
+        <div class="strip">${strip}</div>
+        <div class="note">all accounts on this machine, from <code>${t.dirs.map(esc).join("</code>, <code>")}</code></div>
+      </div>`;
+  }
 
   function card(a) {
     const d = a.data;
@@ -98,11 +147,12 @@
       </section>`;
   }
 
-  let last = null;
+  let last = null, tokens = null, days = 30;
   async function load() {
     try {
-      const r = await fetch("/api/usage", { cache: "no-store" });
+      const [r, t] = await Promise.all([fetch("/api/usage", { cache: "no-store" }), fetch(`/api/tokens?days=${days}`, { cache: "no-store" })]);
       last = await r.json();
+      tokens = await t.json();
       render();
     } catch (e) {
       $("#meta").textContent = `server unreachable: ${e.message}`;
@@ -111,9 +161,16 @@
   function render() {
     if (!last) return;
     $("#main").innerHTML = last.accounts.map(card).join("");
+    if (tokens) $("#tokens").innerHTML = tokens.providers.map(tokensBlock).join("");
     const ok = last.accounts.filter((a) => a.ok).length;
     $("#meta").textContent = `${ok}/${last.accounts.length} accounts live · ${new Date().toLocaleTimeString()}`;
   }
+  $("#days").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    days = Number(b.dataset.d);
+    for (const x of $("#days").children) x.classList.toggle("on", x === b);
+    load();
+  });
   $("#refresh").addEventListener("click", async () => {
     $("#refresh").disabled = true;
     try { await fetch("/api/refresh", { method: "POST" }); await load(); } finally { $("#refresh").disabled = false; }
