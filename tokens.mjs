@@ -14,14 +14,15 @@ import { createReadStream } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2; // v2: records carry the one-hour cache-write portion
 const RETENTION_MS = 400 * 24 * 3600 * 1000; // keep records this long after their timestamp
 const FORK_COPY_MAX_GAP_MS = 1000;
 
 const int = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.trunc(v) : 0);
 const ts = (v) => { const t = typeof v === "string" ? Date.parse(v) : NaN; return Number.isNaN(t) ? null : t; };
 
-// record: [timestampMs, model, uncachedIn, cachedIn, cacheWrite, out, reasoning, dedupeKey|null]
+// record: [timestampMs, model, uncachedIn, cachedIn, cacheWrite, out, reasoning, dedupeKey|null, cacheWrite1h]
+// cacheWrite1h is the part of cacheWrite written with a one-hour TTL (Claude only); it is priced higher.
 const total = (r) => r[2] + r[3] + r[4] + r[5];
 
 // ---------- Claude Code ----------
@@ -38,7 +39,8 @@ function parseClaudeLine(line) {
   const model = typeof m.model === "string" ? m.model : "";
   if (t === null || !model || model.startsWith("<")) return null;
   const key = m.id || o.requestId ? `${m.id ?? ""}:${o.requestId ?? ""}` : null;
-  const r = [t, model, int(u.input_tokens), int(u.cache_read_input_tokens), int(u.cache_creation_input_tokens), int(u.output_tokens), 0, key];
+  const cw = int(u.cache_creation_input_tokens);
+  const r = [t, model, int(u.input_tokens), int(u.cache_read_input_tokens), cw, int(u.output_tokens), 0, key, Math.min(cw, int(u.cache_creation?.ephemeral_1h_input_tokens))];
   return total(r) ? r : null;
 }
 
@@ -80,7 +82,7 @@ function parseCodexLine(line, s) {
     s.forkSuppress = false;
   }
   const inp = int(last.input_tokens), cached = int(last.cached_input_tokens), cw = int(last.cache_write_input_tokens), out = int(last.output_tokens);
-  const r = [t, s.model, Math.max(0, inp - cached - cw), cached, cw, out, Math.min(out, int(last.reasoning_output_tokens)), null];
+  const r = [t, s.model, Math.max(0, inp - cached - cw), cached, cw, out, Math.min(out, int(last.reasoning_output_tokens)), null, 0];
   return total(r) ? r : null;
 }
 
@@ -182,8 +184,10 @@ export class TokenScanner {
   // Totals for the last `days` local calendar days, today included.
   summary(days, pricing) {
     const dayOf = makeDayFormatter();
+    // Calendar-day arithmetic via setDate so DST transitions keep local midnights.
     const today = new Date(); today.setHours(0, 0, 0, 0);
-    const since = today.getTime() - (days - 1) * 86400_000;
+    const start = new Date(today); start.setDate(start.getDate() - (days - 1));
+    const since = start.getTime();
     const seen = new Set();
     const zero = () => ({ uncachedIn: 0, cachedIn: 0, cacheWrite: 0, out: 0, reasoning: 0, total: 0, costUsd: 0, unpriced: 0 });
     const add = (b, r, cost) => {
@@ -195,15 +199,16 @@ export class TokenScanner {
       for (const r of f.records) {
         if (r[0] < since) continue;
         if (r[7] !== null) { if (seen.has(r[7])) continue; seen.add(r[7]); }
-        const cost = pricing?.cost(r[1], r[2], r[3], r[4], r[5]) ?? null;
+        const cost = pricing?.cost(r[1], r[2], r[3], r[4], r[5], r[8] ?? 0) ?? null;
         add(all, r, cost);
         add(byModel[r[1]] ??= zero(), r, cost);
         add(byDay[dayOf(r[0])] ??= zero(), r, cost);
       }
     }
     const series = [];
-    for (let t = since; t <= today.getTime(); t += 86400_000) {
-      const d = dayOf(t); series.push({ day: d, total: byDay[d]?.total ?? 0, costUsd: byDay[d]?.costUsd ?? 0 });
+    for (let i = 0; i < days; i++) {
+      const dt = new Date(start); dt.setDate(start.getDate() + i);
+      const d = dayOf(dt.getTime()); series.push({ day: d, total: byDay[d]?.total ?? 0, costUsd: byDay[d]?.costUsd ?? 0 });
     }
     return { days, ...all, byModel, series, lastScanAt: this.lastScanAt, files: this.files.size };
   }

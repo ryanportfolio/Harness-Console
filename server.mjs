@@ -381,7 +381,10 @@ async function scanAll() {
   await pricing.refresh();
   for (const s of scanners.values()) await s.scan();
 }
-(async function tokenTick() { await scanAll(); setTimeout(tokenTick, TOKEN_SCAN_MS).unref?.(); })();
+(async function tokenTick() {
+  try { await scanAll(); } catch (e) { log(`tokens: scan failed: ${e.message ?? e}`); }
+  finally { setTimeout(tokenTick, TOKEN_SCAN_MS).unref?.(); }
+})();
 
 function tokensPayload(days) {
   return {
@@ -409,7 +412,7 @@ createServer((req, res) => {
     return;
   }
   if (url.pathname === "/api/refresh" && req.method === "POST") {
-    Promise.all([...config.accounts.map(pollOnce), scanAll()]).then(() => { res.writeHead(204); res.end(); });
+    Promise.all([...config.accounts.map(pollOnce), scanAll().catch((e) => log(`tokens: scan failed: ${e.message ?? e}`))]).then(() => { res.writeHead(204); res.end(); });
     return;
   }
   if (url.pathname === "/") {
