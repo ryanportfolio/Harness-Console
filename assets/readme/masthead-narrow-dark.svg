@@ -15,7 +15,7 @@
 @media (prefers-reduced-motion:reduce){*{animation:none!important}.hand{stroke-dashoffset:0}}</style>
 <defs><filter id="w" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="28"/></filter><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#ff9473" stop-opacity="0.55"/><stop offset="1" stop-color="#a0b5eb" stop-opacity="0.55"/></linearGradient><clipPath id="c"><rect x="0.5" y="0.5" width="389" height="851" rx="24"/></clipPath></defs>
 <rect x="0.5" y="0.5" width="389" height="851" rx="24" class="card"/>
-<ellipse cx="350" cy="30" rx="120" ry="60" fill="url(#g)" filter="url(#w)" clip-path="url(#c)"/>
+<g clip-path="url(#c)"><ellipse cx="350" cy="30" rx="120" ry="60" fill="url(#g)" filter="url(#w)"/></g>
 <text x="24" y="64" class="ttl" font-size="36">UsageTracker</text>
 <text x="24" y="94" class="bdy" font-size="13">Rate-limit windows, reset clocks and token</text>
 <text x="24" y="113.5" class="bdy" font-size="13">totals for every Claude Code and Codex</text>

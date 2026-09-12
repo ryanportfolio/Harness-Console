@@ -85,7 +85,7 @@ function masthead(t, narrow) {
   // the one decorative wash, behind the title
   body.push(`<defs><filter id="w" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="${narrow ? 28 : 40}"/></filter><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="${t.wash1}" stop-opacity="0.55"/><stop offset="1" stop-color="${t.wash2}" stop-opacity="0.55"/></linearGradient><clipPath id="c"><rect x="0.5" y="0.5" width="${W - 1}" height="HEIGHT" rx="${narrow ? 24 : 40}"/></clipPath></defs>`);
   body.push(`<rect x="0.5" y="0.5" width="${W - 1}" height="HEIGHT" rx="${narrow ? 24 : 40}" class="card"/>`);
-  body.push(`<ellipse cx="${narrow ? W - 40 : W - 140}" cy="${narrow ? 30 : 40}" rx="${narrow ? 120 : 220}" ry="${narrow ? 60 : 90}" fill="url(#g)" filter="url(#w)" clip-path="url(#c)"/>`);
+  body.push(`<g clip-path="url(#c)"><ellipse cx="${narrow ? W - 40 : W - 140}" cy="${narrow ? 30 : 40}" rx="${narrow ? 120 : 220}" ry="${narrow ? 60 : 90}" fill="url(#g)" filter="url(#w)"/></g>`);
 
   body.push(`<text x="${px}" y="${y}" class="ttl" font-size="${narrow ? 36 : 48}">UsageTracker</text>`);
   y += narrow ? 30 : 36;
