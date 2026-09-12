@@ -92,17 +92,18 @@ async function claudeReadCreds(dir) {
   return { file, root, o };
 }
 
-// The CLI keeps the account profile in .claude.json: inside CLAUDE_CONFIG_DIR, or next to the default ~/.claude.
-async function claudeEmail(dir) {
-  const candidates = [path.join(dir, ".claude.json")];
-  if (path.basename(dir) === ".claude") candidates.push(path.join(path.dirname(dir), ".claude.json"));
-  for (const f of candidates) {
-    try {
-      const email = JSON.parse(await readFile(f, "utf8"))?.oauthAccount?.emailAddress;
-      if (email) return email;
-    } catch { /* try next */ }
-  }
-  return null;
+// Account identity comes from the token, not from .claude.json (that file goes stale after account switches).
+const CLAUDE_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
+async function claudeProfile(state, o) {
+  const key = o.accessToken.slice(-16);
+  if (state.profileKey === key) return state.profile;
+  const r = await fetchJson(CLAUDE_PROFILE_URL, {
+    headers: { authorization: `Bearer ${o.accessToken}`, accept: "application/json", "anthropic-beta": CLAUDE_BETA, "user-agent": claudeUserAgent },
+  });
+  if (!r.ok) return state.profile ?? null;
+  state.profileKey = key;
+  state.profile = { email: r.json?.account?.email ?? null, org: r.json?.organization?.name ?? null };
+  return state.profile;
 }
 
 function claudeExpired(o) {
@@ -197,7 +198,7 @@ async function claudeFetch(acct, state) {
   }
   return {
     plan: [o.subscriptionType, o.rateLimitTier].filter(Boolean).join(" · "),
-    email: await claudeEmail(acct.dir),
+    email: (await claudeProfile(state, o))?.email ?? null,
     tokenExpiresAt: o.expiresAt ? new Date(o.expiresAt).toISOString() : null,
     windows,
     notes,
