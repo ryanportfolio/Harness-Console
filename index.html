@@ -20,7 +20,8 @@
   header .meta { color: var(--muted); font-size: 20px; }
   header button { margin-left: auto; background: transparent; border: 1px solid var(--line); color: var(--fg); border-radius: 8px; padding: 10px 20px; cursor: pointer; font: inherit; }
   header button:hover { border-color: var(--muted); }
-  main { display: grid; grid-template-columns: repeat(auto-fill, minmax(560px, 1fr)); gap: 28px; padding: 20px 40px 48px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr !important; } }
+  main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; padding: 20px 40px 48px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 28px 32px; display: flex; flex-direction: column; gap: 20px; }
   .card.err { border-color: var(--bad); }
   .top { display: flex; align-items: center; gap: 10px; }
