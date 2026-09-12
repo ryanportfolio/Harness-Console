@@ -46,7 +46,7 @@ Bars turn amber at 70% and red at 90% used. A card with a red border shows the l
 
 ## Token totals
 
-Neither provider reports token counts over an API, so the tracker reads the transcripts the CLIs write on this machine: `<dir>/projects/**/*.jsonl` for Claude Code, `<dir>/sessions/**/*.jsonl` for Codex. Each card shows, for the last 7, 30, or 90 days (header buttons): total tokens, the split into uncached input, cache reads, cache writes, and output, the top three models, a bar per day, and an API-equivalent dollar figure. Sessions run on other machines are not counted.
+Neither provider reports token counts over an API, so the tracker reads the transcripts the CLIs write on this machine: `<dir>/projects/**/*.jsonl` for Claude Code, `<dir>/sessions/**/*.jsonl` for Codex. Transcripts carry no account identifier, and logging out and back in with another email puts both accounts' sessions in the same directory, so totals are shown per provider (one panel for Claude Code, one for Codex), combined across accounts. Each panel shows, for the last 7, 30, or 90 days (header buttons): total tokens, the split into uncached input, cache reads, cache writes, and output, the top three models, a bar per day, and an API-equivalent dollar figure. Sessions run on other machines are not counted.
 
 The dollar figure prices the same traffic at public API rates from [LiteLLM's table](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), fetched once a day and cached in `.state/pricing.json`. It is not a subscription bill. Models missing from the table show as unpriced.
 
