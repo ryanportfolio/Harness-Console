@@ -97,10 +97,13 @@ const CLAUDE_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
 async function claudeProfile(state, o) {
   const key = o.accessToken.slice(-16);
   if (state.profileKey === key) return state.profile;
-  const r = await fetchJson(CLAUDE_PROFILE_URL, {
-    headers: { authorization: `Bearer ${o.accessToken}`, accept: "application/json", "anthropic-beta": CLAUDE_BETA, "user-agent": claudeUserAgent },
-  });
-  if (!r.ok) return state.profile ?? null;
+  let r;
+  try {
+    r = await fetchJson(CLAUDE_PROFILE_URL, {
+      headers: { authorization: `Bearer ${o.accessToken}`, accept: "application/json", "anthropic-beta": CLAUDE_BETA, "user-agent": claudeUserAgent },
+    });
+  } catch { return null; } // optional enrichment: never fail the usage poll
+  if (!r.ok) return null; // token changed and lookup failed: no stale email from a previous account
   state.profileKey = key;
   state.profile = { email: r.json?.account?.email ?? null, org: r.json?.organization?.name ?? null };
   return state.profile;
