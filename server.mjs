@@ -92,6 +92,19 @@ async function claudeReadCreds(dir) {
   return { file, root, o };
 }
 
+// The CLI keeps the account profile in .claude.json: inside CLAUDE_CONFIG_DIR, or next to the default ~/.claude.
+async function claudeEmail(dir) {
+  const candidates = [path.join(dir, ".claude.json")];
+  if (path.basename(dir) === ".claude") candidates.push(path.join(path.dirname(dir), ".claude.json"));
+  for (const f of candidates) {
+    try {
+      const email = JSON.parse(await readFile(f, "utf8"))?.oauthAccount?.emailAddress;
+      if (email) return email;
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
 function claudeExpired(o) {
   return typeof o.expiresAt === "number" && o.expiresAt <= Date.now() + CLAUDE_EXPIRY_SKEW_MS;
 }
@@ -184,6 +197,7 @@ async function claudeFetch(acct, state) {
   }
   return {
     plan: [o.subscriptionType, o.rateLimitTier].filter(Boolean).join(" · "),
+    email: await claudeEmail(acct.dir),
     tokenExpiresAt: o.expiresAt ? new Date(o.expiresAt).toISOString() : null,
     windows,
     notes,
