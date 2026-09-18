@@ -1,5 +1,7 @@
 {
   "port": 4545,
+  "claudePollSeconds": 0,
+  "codexPollSeconds": 0,
   "accounts": [
     {
       "name": "Claude 1",

@@ -17,7 +17,7 @@ Node 20 or newer, nothing to install.
 node server.mjs
 ```
 
-Open http://127.0.0.1:4545. The page refetches every 30 seconds and the reset countdowns tick every 15; "Refresh now" polls every account and rescans transcripts at once.
+Open http://127.0.0.1:4545. The page refetches every 30 seconds and the reset countdowns tick every 15; "Refresh now" and every page load poll each account and rescan transcripts at once.
 
 ## Accounts
 
@@ -65,7 +65,7 @@ Parsed records are cached per file in `.state/tokens/`, keyed by size and mtime,
 
 - Claude access tokens expire after a few hours. When one is expired, the tracker refreshes it with the stored refresh token (same endpoint and client id the CLI uses) and writes the new token back to that account's `.credentials.json`, atomically. This is the only write the tracker performs. If the refresh token itself is rejected, the card says to run `claude` in that directory.
 - Codex access tokens last about ten days and the CLI refreshes them on use. The tracker never refreshes Codex tokens; it warns 24 hours before expiry.
-- Claude is polled every 180 seconds per account (the usage endpoint rate-limits faster polling), Codex every 60. Both are configurable in `accounts.json` via `claudePollSeconds` and `codexPollSeconds`. The last good snapshot per account is cached in `.state/` so the page shows data right after a restart.
+- Claude is polled every 180 seconds per account (the usage endpoint rate-limits faster polling), Codex every 60. Both are configurable in `accounts.json` via `claudePollSeconds` and `codexPollSeconds`; 0 turns the timer off, leaving one fetch at startup plus "Refresh now" and page loads. A refresh skips accounts fetched within `claudeMinRefreshSeconds` (180) or `codexMinRefreshSeconds` (30). The last good snapshot per account is cached in `.state/` so the page shows data right after a restart.
 
 ## Endpoints used
 

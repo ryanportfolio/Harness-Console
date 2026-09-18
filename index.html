@@ -238,7 +238,9 @@
     $("#refresh").disabled = true;
     try { await fetch("/api/refresh", { method: "POST" }); await load(); } finally { $("#refresh").disabled = false; }
   });
-  load();
+  // A page load acts like "Refresh now": show the cached snapshot at once, then pull fresh numbers.
+  // The server skips accounts fetched within the last few minutes, so reloads cannot trip the 429 backoff.
+  load().then(() => fetch("/api/refresh", { method: "POST" })).then(load).catch(() => {});
   setInterval(load, 30_000);
   setInterval(render, 15_000); // keep countdowns moving between fetches
 </script>
