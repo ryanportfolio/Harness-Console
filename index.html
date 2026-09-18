@@ -5,76 +5,79 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>UsageTracker</title>
 <style>
-  /* Monad style reference: parchment canvas, serif display at weight 400,
-     mono for every functional string, ash hairlines, pill containers, no
-     shadows. Lake blue is spent once, on the primary action. The bar trio
-     (ok/warn/bad) is functional and kept as is. */
+  /* Vellum style: one warm sand canvas, near-black ink, a single sans typeface
+     doing all the hierarchy work, hairline rules instead of containers, zero
+     radius, no shadows, no dark mode. Series are shades of the earth palette:
+     Claude in bronze, Codex in ink; segments keep their alpha steps. Usage
+     bars darken as they fill (hayfield, bronze, ink). */
   :root {
-    --bg: #f6f3f1; --card: #f6f3f1; --raised: #cfdaf5; --fg: #242424; --body: #4e4d4d; --muted: #797776; --line: #cecac8;
-    --ok: #2f9e5f; --warn: #d9932c; --bad: #d64545; --track: #e6e1dd;
-    --claude: #c96a3a; --codex: #2b59d1; --accent: #2b59d1;
-    --mono: "ABC Diatype Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
-    --serif: "Untitled Serif", ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #1c1b1a; --card: #242424; --raised: #3b4a6b; --fg: #f6f3f1; --body: #d9d4d0; --muted: #a29e9b; --line: #4e4d4d; --track: #3a3938; --codex: #7d9df0; }
+    --bg: #f4e6cd; --card: #f4e6cd; --linen: #edddc3; --fg: #1e211e; --body: #1e211e; --muted: #8f774b; --line: #1e211e;
+    --ok: #ba9d6a; --warn: #8f774b; --bad: #1e211e; --track: #edddc3;
+    --claude: #8f774b; --codex: #1e211e; --accent: #1e211e;
+    --sans: Verdana, Geneva, "DejaVu Sans", sans-serif;
+    --mono: var(--sans); --serif: var(--sans);
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 400 18px/1.35 var(--mono); letter-spacing: -0.02em; }
-  header { display: flex; align-items: baseline; gap: 24px; padding: 40px 40px 16px; max-width: 1432px; margin: 0 auto; }
-  header h1 { font: 400 40px/1.2 var(--serif); letter-spacing: -0.02em; margin: 0; }
-  header .meta { color: var(--muted); font-size: 14px; text-transform: uppercase; letter-spacing: -0.02em; }
-  button { font: 500 14px/1 var(--mono); text-transform: uppercase; letter-spacing: -0.02em; border-radius: 100px; padding: 14px 28px; cursor: pointer; }
-  header #refresh { margin-left: auto; background: var(--accent); color: #f6f3f1; border: 1px solid var(--accent); }
-  header #refresh:disabled { opacity: .5; cursor: default; }
-  .days { display: flex; gap: 8px; }
-  .days button { background: transparent; border: 1px solid var(--line); color: var(--body); padding: 12px 20px; }
-  .days button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
-  #tokens, main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding: 16px 40px 0; max-width: 1432px; margin: 0 auto; }
-  main { padding-bottom: 64px; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 400 16px/1.5 var(--sans); }
+  header { display: flex; align-items: baseline; gap: 24px; padding: 14px 40px 6px; max-width: 1432px; margin: 0 auto; border-bottom: 1px solid var(--line); }
+  header h1 { font: 500 40px/1.2 var(--sans); letter-spacing: -0.03em; margin: 0; }
+  header .meta { color: var(--muted); font-size: 14px; text-transform: uppercase; letter-spacing: .04em; }
+  button { font: 400 14px/1.5 var(--sans); text-transform: uppercase; letter-spacing: .04em; border: 0; border-radius: 0; padding: 0; background: transparent; color: var(--fg); cursor: pointer; text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; }
+  button:hover { text-decoration-thickness: 2px; }
+  header #refresh { margin-left: auto; font-size: 20px; font-weight: 700; text-transform: none; letter-spacing: 0; }
+  header #refresh::after { content: " ↗"; }
+  header #refresh:disabled { color: var(--muted); cursor: default; text-decoration: none; }
+  .days { display: flex; gap: 16px; }
+  .days button { color: var(--muted); text-decoration: none; }
+  .days button.on { color: var(--fg); text-decoration: underline; }
+  #tokens, main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 60px; padding: 0 40px; max-width: 1432px; margin: 0 auto; }
+  #tokens { padding-top: 6px; }
+  main { padding-bottom: 16px; }
   @media (max-width: 900px) { #tokens, main { grid-template-columns: 1fr; } }
-  .card, .tokens { background: var(--card); border: 1px solid var(--line); border-radius: 40px; padding: 40px; }
-  .card { display: flex; flex-direction: column; gap: 20px; }
-  .card.err { border-color: var(--bad); }
+  .card, .tokens { background: transparent; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 14px 0 16px; }
+  .card { display: flex; flex-direction: column; gap: 10px; }
+  .card.err .name::after { content: " · error"; color: var(--muted); font-size: 14px; text-transform: uppercase; letter-spacing: .04em; }
   .top { display: flex; align-items: baseline; gap: 12px; }
-  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; align-self: center; }
+  .dot { width: 10px; height: 10px; border-radius: 0; flex: none; align-self: center; }
   .dot.claude { background: var(--claude); } .dot.codex { background: var(--codex); }
-  .name { font: 400 32px/1.2 var(--serif); letter-spacing: -0.02em; }
-  .plan { color: var(--muted); font-size: 14px; margin-left: auto; text-align: right; text-transform: uppercase; }
-  .win { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: baseline; }
+  .name { font: 500 24px/1.4 var(--sans); letter-spacing: -0.01em; }
+  .plan { color: var(--muted); font-size: 14px; margin-left: auto; text-align: right; text-transform: uppercase; letter-spacing: .04em; }
+  .win { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: baseline; }
   .win .label { font-size: 16px; color: var(--body); }
-  .win .pct { font-variant-numeric: tabular-nums; font-weight: 500; font-size: 20px; }
-  .bar { grid-column: 1 / -1; height: 10px; margin: 4px 0; background: var(--track); border-radius: 100px; overflow: hidden; }
-  .bar > i { display: block; height: 100%; border-radius: 100px; background: var(--ok); transition: width .4s; }
+  .win .pct { font-variant-numeric: tabular-nums; font-weight: 500; font-size: 16px; }
+  .bar { grid-column: 1 / -1; height: 6px; margin: 2px 0; background: var(--track); border-radius: 0; overflow: hidden; }
+  .bar > i { display: block; height: 100%; border-radius: 0; background: var(--ok); transition: width .4s; }
   .bar.warn > i { background: var(--warn); } .bar.bad > i { background: var(--bad); }
   .reset { grid-column: 1 / -1; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .notes, .warnings, .error { font-size: 14px; }
-  .notes { color: var(--muted); } .warnings { color: var(--warn); } .error { color: var(--bad); white-space: pre-wrap; word-break: break-word; }
-  .foot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; text-transform: uppercase; }
+  .notes { color: var(--muted); } .warnings { color: var(--warn); } .error { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
+  .top .when { display: flex; gap: 10px; align-self: center; margin-left: 8px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+  .top .when code { cursor: default; }
   .stale { color: var(--warn); }
   code { font-family: inherit; font-size: inherit; text-transform: none; }
-  .tokens { display: grid; gap: 8px; }
+  .tokens { display: grid; gap: 4px; }
   .tokens .head { display: flex; align-items: baseline; gap: 12px; }
   .tokens .head .name { font-size: 24px; }
   .tokens .head .dot { margin-right: 4px; }
-  .tokens .head .total { font-weight: 500; font-size: 28px; font-variant-numeric: tabular-nums; margin-left: auto; }
-  .tokens .row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
-  .tokens .row .hd { font-size: 12px; color: var(--muted); text-transform: uppercase; width: 64px; flex: none; }
-  .stack { display: flex; flex: 1; height: 12px; border-radius: 100px; overflow: hidden; background: var(--track); gap: 2px; }
+  .tokens .head .total { font-weight: 500; font-size: 24px; font-variant-numeric: tabular-nums; margin-left: auto; }
+  .tokens .row { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+  .tokens .row .hd { font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; width: 72px; flex: none; }
+  .stack { display: flex; flex: 1; height: 10px; border-radius: 0; overflow: hidden; background: var(--track); gap: 2px; }
   .stack i { display: block; height: 100%; min-width: 2px; background: var(--hue); cursor: default; }
   .stack i:hover, .stack i:focus-visible { filter: brightness(.85); outline: none; }
-  .strip i:focus-visible { opacity: 1; outline: none; }
-  .tokens .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--muted); padding-left: 76px; }
-  .tokens .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--sw); margin-right: 6px; vertical-align: -1px; }
+  .tokens .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 14px; color: var(--muted); padding-left: 84px; }
+  .tokens .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 0; background: var(--sw); margin-right: 6px; vertical-align: -1px; }
   .tokens[data-kind="claude"] { --hue: var(--claude); } .tokens[data-kind="codex"] { --hue: var(--codex); }
-  .tokens .foot { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); text-transform: uppercase; }
-  .tokens .foot .pill { border: 1px solid var(--line); border-radius: 100px; padding: 6px 12px; color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .tokens .foot { display: flex; align-items: center; gap: 12px; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .tokens .foot .pill { border: 0; border-radius: 0; padding: 0; color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
   .tokens .foot .pill.warn { color: var(--warn); }
-  .strip { display: flex; align-items: flex-end; gap: 3px; height: 56px; margin-top: 12px; }
-  .strip i { flex: 1; background: var(--hue); opacity: .6; border-radius: 100px 100px 0 0; min-height: 2px; cursor: default; }
-  .strip i:hover { opacity: 1; }
+  .strip { display: flex; align-items: stretch; gap: 3px; height: 32px; margin-top: 6px; }
+  .strip .col { flex: 1; display: flex; align-items: flex-end; min-width: 0; cursor: default; outline: none; }
+  .strip .col:hover, .strip .col:focus-visible { background: var(--track); }
+  .strip i { display: block; width: 100%; background: var(--hue); opacity: .6; border-radius: 0; min-height: 2px; }
+  .strip .col:hover i, .strip .col:focus-visible i { opacity: 1; }
   .strip i.zero { background: var(--track); opacity: 1; }
-  #tip { position: fixed; z-index: 10; pointer-events: none; display: none; background: var(--fg); color: var(--bg); font: 400 13px/1.35 var(--mono); padding: 8px 12px; border-radius: 100px; white-space: nowrap; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  #tip { position: fixed; z-index: 10; pointer-events: none; display: none; background: var(--fg); color: var(--bg); font: 400 14px/1.35 var(--sans); padding: 6px 10px; border-radius: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -128,7 +131,8 @@
     if (!t.files) return `<div class="tokens" data-kind="${esc(t.kind)}">${head}<span class="total">no transcripts</span></div></div>`;
     const max = Math.max(1, ...t.series.map((d) => d.total));
     const day = (d) => new Date(d.day + "T00:00").toLocaleDateString([], { month: "short", day: "numeric" });
-    const strip = t.series.map((d) => `<i class="${d.total ? "" : "zero"}" style="height:${Math.max(2, Math.round(d.total / max * 100))}%" tabindex="0" role="img" aria-label="${day(d)} · ${fmt(d.total)}${d.costUsd ? " · " + usd(d.costUsd) : ""}" data-tip="${day(d)} · ${fmt(d.total)}${d.costUsd ? " · " + usd(d.costUsd) : ""}"></i>`).join("");
+    // Each day is a full-height column so the tooltip triggers anywhere above the bar, not only on a 2px sliver.
+    const strip = t.series.map((d) => `<span class="col" tabindex="0" role="img" aria-label="${day(d)} · ${fmt(d.total)}${d.costUsd ? " · " + usd(d.costUsd) : ""}" data-tip="${day(d)} · ${fmt(d.total)}${d.costUsd ? " · " + usd(d.costUsd) : ""}"><i class="${d.total ? "" : "zero"}" style="height:${Math.max(2, Math.round(d.total / max * 100))}%"></i></span>`).join("");
     const split = stack([
       { label: "input", value: t.uncachedIn, alpha: 1 }, { label: "cache read", value: t.cachedIn, alpha: .45 },
       { label: "cache write", value: t.cacheWrite, alpha: .25 }, { label: "output", value: t.out, alpha: .7 },
@@ -155,6 +159,7 @@
       </div>`;
   }
 
+  const path = { basename: (p) => p.split(/[\\/]/).filter(Boolean).pop() ?? "" };
   function card(a) {
     const d = a.data;
     const win = (w) => `
@@ -176,10 +181,10 @@
         <div class="top">
           <span class="dot ${esc(a.kind)}"></span>
           <span class="name">${esc(a.name)}</span>
+          <span class="when">${stale}<code data-tip="${esc(a.dir ?? "")}">${esc(path.basename(a.dir ?? ""))}</code></span>
           <span class="plan">${esc(d?.plan ?? "")}${d?.email ? `<br>${esc(d.email)}` : ""}</span>
         </div>
         ${body}${err}
-        <div class="foot">${stale}<code>${esc(a.dir ?? "")}</code></div>
       </section>`;
   }
 

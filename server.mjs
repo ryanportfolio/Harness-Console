@@ -197,6 +197,15 @@ async function claudeFetch(acct, state) {
     win(j.seven_day_opus ?? j.sevenDayOpus, "Weekly Opus"),
     win(j.seven_day_sonnet ?? j.sevenDaySonnet, "Weekly Sonnet"),
   ].filter(Boolean);
+  // Model-scoped caps (Fable today) arrive only in `limits[]` as weekly_scoped rows; the legacy
+  // seven_day_<model> keys stay null for them.
+  for (const l of Array.isArray(j.limits) ? j.limits : []) {
+    const name = l?.scope?.model?.display_name ?? l?.scope?.surface?.display_name ?? l?.scope?.surface;
+    if (!name || typeof name !== "string" || l.percent == null) continue;
+    const label = `${l.group === "session" ? "Session" : "Weekly"} ${name}`;
+    if (windows.some((w) => w.label === label)) continue;
+    windows.push({ label, usedPercent: l.percent, resetsAt: l.resets_at ?? null, severity: l.severity ?? null });
+  }
   const extra = j.extra_usage ?? j.extraUsage;
   const notes = [];
   if (extra?.is_enabled ?? extra?.isEnabled) {
