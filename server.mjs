@@ -30,8 +30,12 @@ for (const a of config.accounts) a.dir = path.resolve(a.dir.replace(/^~(?=[\\/]|
 const STATE_DIR = path.join(here, ".state");
 await mkdir(STATE_DIR, { recursive: true });
 
+// 0 disables the timer: the account is fetched once at startup and after that only on /api/refresh.
 const CLAUDE_POLL_MS = (config.claudePollSeconds ?? 180) * 1000; // /api/oauth/usage 429s below ~180s
 const CODEX_POLL_MS = (config.codexPollSeconds ?? 60) * 1000;
+// /api/refresh skips an account fetched more recently than this, so a page reload cannot trip the 429 backoff.
+const CLAUDE_MIN_GAP_MS = (config.claudeMinRefreshSeconds ?? 180) * 1000;
+const CODEX_MIN_GAP_MS = (config.codexMinRefreshSeconds ?? 30) * 1000;
 const HTTP_TIMEOUT_MS = 15_000;
 const TOKEN_SCAN_MS = (config.tokenScanSeconds ?? 300) * 1000;
 
@@ -329,7 +333,7 @@ async function codexFetch(acct, state) {
 
 // ---------- poller ----------
 
-const PROVIDERS = { claude: { fetch: claudeFetch, pollMs: CLAUDE_POLL_MS }, codex: { fetch: codexFetch, pollMs: CODEX_POLL_MS } };
+const PROVIDERS = { claude: { fetch: claudeFetch, pollMs: CLAUDE_POLL_MS, minGapMs: CLAUDE_MIN_GAP_MS }, codex: { fetch: codexFetch, pollMs: CODEX_POLL_MS, minGapMs: CODEX_MIN_GAP_MS } };
 
 const snapshots = new Map(); // name -> { ok, fetchedAt, data | error, dir, kind }
 const pollState = new Map();
@@ -369,7 +373,7 @@ async function pollOnce(acct) {
 function schedule(acct) {
   const p = PROVIDERS[acct.kind];
   if (!p) { log(`[${acct.name}] unknown kind '${acct.kind}'`); return; }
-  const tick = async () => { await pollOnce(acct); setTimeout(tick, p.pollMs).unref?.(); };
+  const tick = async () => { await pollOnce(acct); if (p.pollMs > 0) setTimeout(tick, p.pollMs).unref?.(); };
   tick();
 }
 
@@ -447,7 +451,8 @@ createServer((req, res) => {
     return;
   }
   if (url.pathname === "/api/refresh" && req.method === "POST") {
-    Promise.all([...config.accounts.map(pollOnce), scanAll().catch((e) => log(`tokens: scan failed: ${e.message ?? e}`))]).then(() => { res.writeHead(204); res.end(); });
+    const fresh = (a) => Date.now() - Date.parse(snapshots.get(a.name)?.fetchedAt ?? 0) < PROVIDERS[a.kind].minGapMs;
+    Promise.all([...config.accounts.filter((a) => !fresh(a)).map(pollOnce), scanAll().catch((e) => log(`tokens: scan failed: ${e.message ?? e}`))]).then(() => { res.writeHead(204); res.end(); });
     return;
   }
   if (url.pathname === "/") {
