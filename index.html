@@ -51,6 +51,7 @@
   .bar.warn > i { background: var(--warn); } .bar.bad > i { background: var(--bad); }
   .reset { grid-column: 1 / -1; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .notes, .warnings, .error { font-size: 14px; }
+  button.login { margin-top: 6px; font-size: 16px; font-weight: 700; text-transform: none; letter-spacing: 0; }
   .notes { color: var(--muted); } .warnings { color: var(--warn); } .error { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
   .top .when { display: flex; gap: 10px; align-self: center; margin-left: 8px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
   .top .when code { cursor: default; }
@@ -175,7 +176,8 @@
         + (d.notes?.length ? `<div class="notes">${d.notes.map(esc).join("<br>")}</div>` : "")
         + (d.warnings?.length ? `<div class="warnings">${d.warnings.map(esc).join("<br>")}</div>` : "")
       : "";
-    const err = a.ok ? "" : `<div class="error">${esc(a.error)}</div>`;
+    const needsLogin = !a.ok && /run `(claude|codex)/.test(a.error ?? "");
+    const err = a.ok ? "" : `<div class="error">${esc(a.error)}${needsLogin ? `<br><button class="login" data-account="${esc(a.name)}">Sign in again</button>` : ""}</div>`;
     const stale = !a.ok && d ? `<span class="stale">showing data from ${ago(a.lastGoodAt)}</span>` : `<span>${a.ok ? "fetched " + ago(a.fetchedAt) : ""}</span>`;
     return `
       <section class="card ${a.ok ? "" : "err"}">
@@ -234,6 +236,12 @@
     days = Number(b.dataset.d);
     for (const x of $("#days").children) x.classList.toggle("on", x === b);
     load();
+  });
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest("button.login"); if (!b) return;
+    b.disabled = true;
+    const r = await fetch(`/api/login?account=${encodeURIComponent(b.dataset.account)}`, { method: "POST" });
+    b.replaceWith(Object.assign(document.createElement("span"), { className: "notes", textContent: r.ok ? "A console window opened. Finish the browser sign-in there, then press Refresh now." : `Could not open the sign-in window (${r.status}).` }));
   });
   $("#refresh").addEventListener("click", async () => {
     $("#refresh").disabled = true;

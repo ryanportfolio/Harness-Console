@@ -3,7 +3,7 @@
 
 import { readFile, writeFile, rename, mkdir, stat } from "node:fs/promises";
 import { createServer } from "node:http";
-import { exec } from "node:child_process";
+import { exec, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,9 +33,10 @@ await mkdir(STATE_DIR, { recursive: true });
 // 0 disables the timer: the account is fetched once at startup and after that only on /api/refresh.
 const CLAUDE_POLL_MS = (config.claudePollSeconds ?? 180) * 1000; // /api/oauth/usage 429s below ~180s
 const CODEX_POLL_MS = (config.codexPollSeconds ?? 60) * 1000;
-// /api/refresh skips an account fetched more recently than this, so a page reload cannot trip the 429 backoff.
-const CLAUDE_MIN_GAP_MS = (config.claudeMinRefreshSeconds ?? 180) * 1000;
-const CODEX_MIN_GAP_MS = (config.codexMinRefreshSeconds ?? 30) * 1000;
+// /api/refresh skips an account fetched more recently than this. Default 0: every page load and
+// "Refresh now" polls upstream. A 429 from the usage API still parks that account for five minutes.
+const CLAUDE_MIN_GAP_MS = (config.claudeMinRefreshSeconds ?? 0) * 1000;
+const CODEX_MIN_GAP_MS = (config.codexMinRefreshSeconds ?? 0) * 1000;
 const HTTP_TIMEOUT_MS = 15_000;
 const TOKEN_SCAN_MS = (config.tokenScanSeconds ?? 300) * 1000;
 
@@ -450,8 +451,23 @@ createServer((req, res) => {
     res.end(JSON.stringify(tokensPayload(days)));
     return;
   }
+  if (url.pathname === "/api/login" && req.method === "POST") {
+    // A dead refresh token needs a fresh browser sign-in, which only the CLI can run. Open a console
+    // window with the account's config dir set so the new token lands in the file the tracker reads.
+    const acct = config.accounts.find((a) => a.name === url.searchParams.get("account"));
+    if (!acct) { res.writeHead(404); res.end(); return; }
+    if (process.platform !== "win32") { res.writeHead(501, { "content-type": "text/plain" }); res.end("sign-in window is Windows only; run the CLI login yourself"); return; }
+    const [envName, command] = acct.kind === "codex" ? ["CODEX_HOME", "codex login"] : ["CLAUDE_CONFIG_DIR", "claude auth login"];
+    const child = spawn("cmd.exe", ["/c", "start", `${acct.name} sign-in`, "cmd.exe", "/k", `set "${envName}=${acct.dir}" && ${command}`], { detached: true, stdio: "ignore", shell: false, windowsHide: false });
+    child.on("error", (e) => log(`[${acct.name}] sign-in window failed: ${e.message}`));
+    child.unref();
+    log(`[${acct.name}] opened sign-in window (${command})`);
+    res.writeHead(204); res.end();
+    return;
+  }
   if (url.pathname === "/api/refresh" && req.method === "POST") {
-    const fresh = (a) => Date.now() - Date.parse(snapshots.get(a.name)?.fetchedAt ?? 0) < PROVIDERS[a.kind].minGapMs;
+    // Only a healthy snapshot is throttled; an account in error retries at once so a fresh sign-in shows up.
+    const fresh = (a) => snapshots.get(a.name)?.ok && Date.now() - Date.parse(snapshots.get(a.name).fetchedAt) < PROVIDERS[a.kind].minGapMs;
     Promise.all([...config.accounts.filter((a) => !fresh(a)).map(pollOnce), scanAll().catch((e) => log(`tokens: scan failed: ${e.message ?? e}`))]).then(() => { res.writeHead(204); res.end(); });
     return;
   }
