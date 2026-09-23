@@ -21,6 +21,8 @@
     "wow-loop": "native",
     "writing": "native",
     "writing-plans": "native",
-    "writing-skills": "disabled"
+    "writing-skills": "disabled",
+    "long-horizon-workflows": "disabled",
+    "verify-this": "native"
   }
 }

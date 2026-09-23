@@ -10,9 +10,17 @@ For one or two small choices, inspect context, recommend a direction, resolve th
 decision, and continue. Use a fuller design when competing approaches materially affect
 the result or when failure would be costly.
 
+When deciding whether repeated operations need a shared boundary, read
+[selective shared-code refactoring](references/shared-code-refactoring.md).
+
 Read the smallest useful set of project facts, existing patterns, representative code,
-and constraints. Separate observable facts from user-owned preferences. Investigate facts
-instead of asking the user to retrieve them. Preserve already-approved direction.
+and constraints. Identify the intended outcome and how success would be recognized,
+using existing context where possible. Separate observable facts from user-owned
+preferences. Preserve already-approved direction.
+
+Investigate facts instead of asking the user to retrieve them. For an assumption that
+could change the recommendation, use a cheap, authorized check when available;
+otherwise state the uncertainty.
 
 Ask concise, related questions only for decisions that change scope, behavior, architecture,
 or another important outcome. Use the current input tool when available and appropriate;

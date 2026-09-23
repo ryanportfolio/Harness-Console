@@ -18,6 +18,9 @@ continue useful work that does not depend on an independent verdict.
 
 Create `.tmp/long-horizon/<task-slug>/state.md` before execution. Manager alone updates it.
 Store bulky output and per-round briefs alongside it, outside the active summary.
+Baseline identity must include path/content hashes for relevant dirty, staged, untracked,
+and ignored generated artifacts; record deletions and unavailable coverage. A Git revision
+alone cannot identify the actual working state.
 
 | Field | Required content |
 |---|---|
@@ -51,24 +54,34 @@ publication, deployments, migrations, installation, or external messages.
 
 1. **Plan one step.** Define allowed paths/actions, dependencies, local done-checks, and
    relevant task constraints. Capture a pre-round baseline, including dirty and untracked
-   files, sufficient to distinguish this round's changes from existing work.
+   files, sufficient to distinguish this round's changes from existing work. Save a
+   versioned auditor brief now, before spawning the executor, from the contract, scope,
+   checks, baseline identity and raw artifact paths. Record its path and content hash.
 2. **Execute.** Spawn a fresh agent with `fork_turns: "none"` when that parameter is exposed.
    Supply a standalone brief: step, scope, checks, necessary verified facts, relevant dead
    ends, absolute workspace/artifact paths, current permissions and style instructions.
    Keep the brief sufficient without Manager conversation history. Use the exposed runtime's
    equivalent if names differ. If only inherited context is possible, record the limitation;
-   do not claim a fresh independent audit. Inherit the session model unless explicitly directed
-   otherwise. Executor implements and verifies only its step, then returns changed paths,
+   do not claim a fresh independent audit. Honor explicit user model choices; otherwise
+   inherit the session model. If a requested model is unavailable, disclose the gap rather
+   than silently substituting. Executor implements and verifies only its step, then returns changed paths,
    commands/results, and blockers. It cannot edit Manager state or dispatch more agents.
-3. **Audit after execution stops.** Spawn a separate fresh agent. Give it the contract and
-   amendments, authorized step scope, local checks, baseline, and workspace paths. Exclude
+3. **Audit after execution stops.** Spawn a separate fresh agent with the prewritten
+   auditor brief byte for byte. Do not rewrite it after reading executor output. A Plan
+   defect belongs in the next round. An explicit user amendment requires reconciling
+   workers, retaining old briefs/baseline, and freezing a new version from the amended
+   contract and raw artifacts without executor assessments. Exclude
    executor reports, turns, and verdicts. If a report is itself the requested deliverable,
    the auditor must inspect it as an artifact, without receiving the executor's assessment.
    Auditor inspects actual changes and runs relevant
    checks itself. It does not fix implementation or write Manager state. Keep other writers
    off the audited files until the verdict is integrated.
 4. **Integrate.** Accept only `complete + clean + aligned` backed by evidence. Otherwise
-   record findings, schedule repair, and invalidate prior claims affected by failed changes.
+   record findings, invalidate prior claims affected by failed changes, and schedule the
+   next round by the auditor's `repairable` verdict: `yes` earns one recovery round on the
+   same approach with the auditor's diagnostic in its brief, counted as the step's second
+   attempt; `no` sends the approach to Dead ends and the next brief changes approach. One
+   recovery per step: a failed recovery is the second failure and Stagnation applies.
    Preserve unrelated verified claims. Persist state before the next round.
 
 Use native subagents for rounds; creating sidebar tasks is not a substitute. Wait for
@@ -84,6 +97,10 @@ Auditor returns:
 - `integrity`: clean / suspect / violation. Clean requires observed artifacts and changes
   within scope, established against the baseline; missing evidence means suspect.
 - `contract`: aligned / drifted, justified against the current contract version.
+- `repairable`: yes / no, on `incomplete` only, with the diagnostic from the auditor's own
+  check run. Yes means a mechanical fault the approach survives (build error, missing
+  dependency, harness or resource failure); no means the approach itself failed. A
+  diagnostic that exists only in the executor's report is a claim and does not count.
 - Each applicable check: passed / failed / unavailable, command or inspection, actual
   result, and evidence location. Record the inspected revision and dirty-file fingerprints.
 
@@ -104,12 +121,20 @@ to the inspected workspace; later relevant edits require revalidation.
 
 ## Stagnation and stopping
 
-- Same step fails twice: record the cause and change approach based on evidence.
+- Same step fails twice: record the cause and change approach based on evidence. A failed
+  recovery round is the second failure.
 - Three rounds produce no new verified progress: pause dispatch and reconsider the
   decomposition. A blocked tool or missing authority needs recovery, not repeated code edits.
-- At `max(5, 2 * initial step count)` rounds, reassess scope and remaining work. Record a
-  changed strategy before continuing; a numeric cap alone is not completion or a reason to
-  abandon feasible authorized work. Honor explicit user limits and runtime stop rules.
+- Count both triggers from the Audit log, never from memory. A rewrite may route the stuck
+  step through `arena` (parallel candidates, pick, graft) inside the executor agent; the
+  Manager never reads candidates, picks or grafts, and the auditor sees only the workspace
+  result. Candidates need Contract and Dead ends copied in, and a worktree starts from HEAD,
+  so use `.tmp/arena-*` copies or commit a WIP first or earlier uncommitted edits are lost.
+- At `max(5, 2 * initial step count)` rounds, reassess scope and remaining work. Tag every
+  Remaining item continue, reserve, or close with a one-line reason; a reserved item reopens
+  only through the final audit's failed checks or a user instruction. Record a changed
+  strategy before continuing; a numeric cap alone is not completion or a reason to abandon
+  feasible authorized work. Honor explicit user limits and runtime stop rules.
 
 Track executor attempts and auditor invocations, including retries. A user-stated budget
 or a bound agreed with the user is binding; checkpoint before exceeding it. Distinguish

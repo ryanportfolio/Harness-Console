@@ -19,6 +19,9 @@ Load only relevant guidance:
 - [Loading and delivery](references/loading.md): startup, page loads, assets, bundles, network requests, and readiness.
 - [Services and resources](references/services.md): APIs, databases, throughput, memory, CPU, disk, and sustained workloads.
 
+For experiment evidence and before/after presentation, read the packaged
+[evidence report](references/evidence-report.md); retain the measurement and review gates below.
+
 Use existing project tools first. This workflow does not grant permission to install tools, run disruptive production load, publish changes, or alter unrelated infrastructure.
 
 ## Record a repeatable baseline
@@ -56,9 +59,11 @@ Check correctness and affected user journeys alongside performance. Preserve fea
 
 Keep changes with repeatable, practically meaningful gains and no disallowed regressions. Discard failed experiments by reverting only this round's edits. Treat improvements indistinguishable from run variation as inconclusive. Re-profile after meaningful wins because the bottleneck may move. Do not keep speculative changes merely because they look efficient.
 
+Pick the next hypothesis from the whole experiment record (kept, discarded, inconclusive, and why), not from the best result so far. After a discard, the next round moves to the next-ranked bottleneck unless new profile evidence justifies staying; a discarded hypothesis returns only with such evidence. The stop rule below still applies: two consecutive rounds without a retained gain end the loop, whichever bottleneck they targeted.
+
 ## Independent challenge
 
-Before accepting a round, obtain fresh independent review through exposed agents. In Codex, use `collaboration.spawn_agent` with `fork_turns: "none"`. Provide the request, constraints, skill, exact source states, diff, reproduction commands, and raw evidence paths. Clearly label implementer conclusions as unverified. Reviewers must inspect evidence and code themselves.
+Before accepting a round, obtain fresh independent review through exposed agents. Inspect capacity, counting the manager and active workers; run the two review lenses in separate sequential fresh contexts when they cannot fit together. Honor explicit model choices; otherwise inherit the configured model. Disclose an unavailable requested model rather than silently substituting it. In Codex, use `collaboration.spawn_agent` with `fork_turns: "none"`. Provide the request, constraints, skill, exact source states, diff, reproduction commands, and raw evidence paths. Clearly label implementer conclusions as unverified. Reviewers must inspect evidence and code themselves.
 
 - Measurement reviewer: challenge comparability, sample sufficiency, benchmark relevance, overhead, noise, and interpretation. Independently reproduce the decisive comparison when feasible; otherwise state that runtime reproduction remains unverified.
 - Regression reviewer: inspect the full experiment diff, exercise affected behavior, and challenge quality losses, resource shifts, accessibility damage, and edge cases. Read actual captures when visual behavior changes.
