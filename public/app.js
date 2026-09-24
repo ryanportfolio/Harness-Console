@@ -300,7 +300,7 @@ function syncRepoBlock(repo) {
       row.title = tree.skills.join(', ');
       row.append(b, `${tree.own ? '' : ` ${tree.path}`}: ${shownSkills}`); list.append(row);
     }
-    const hint = document.createElement('span'); hint.className = 'sync-edited'; hint.textContent = 'Sessions in these checkouts load the older copies. Merge main into the branch to update them.';
+    const hint = document.createElement('span'); hint.className = 'sync-edited'; hint.textContent = 'Sessions in these checkouts load the older copies. Merge main into a worktree's branch; for this folder on main, use Update main on the Repositories tab.';
     list.append(hint); group.append(name, list); section.append(group);
   }
   return section;

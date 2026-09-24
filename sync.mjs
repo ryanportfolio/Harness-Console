@@ -83,13 +83,16 @@ export async function openTemplate({ cache = TEMPLATE_CACHE, source = `https://g
   for (let index = 0; index < commits.length; index += 8) {
     await Promise.all(commits.slice(index, index + 8).map(async commit => { if (!commitTrees.has(commit)) commitTrees.set(commit, await skillTrees(git, commit)); }));
   }
-  for (const commit of commits) for (const part of PARTS) for (const [name, sha] of commitTrees.get(commit)[part]) {
-    if (!history[part].has(name)) history[part].set(name, new Set());
+  // age: how recent each tree is, as the index of the newest commit holding it (0 = head).
+  const age = Object.fromEntries(PARTS.map(part => [part, new Map()]));
+  commits.forEach((commit, index) => { for (const part of PARTS) for (const [name, sha] of commitTrees.get(commit)[part]) {
+    if (!history[part].has(name)) { history[part].set(name, new Set()); age[part].set(name, new Map()); }
     history[part].get(name).add(sha);
-  }
+    if (!age[part].get(name).has(sha)) age[part].get(name).set(sha, index);
+  } });
   const modes = (await showJson(git, head, '.agents/skill-modes.json'))?.skills ?? {};
   const registries = Object.fromEntries(await Promise.all(REGISTRIES.map(async file => [file, await showJson(git, head, file)])));
-  return { cache, head, git, current: await skillTrees(git, head), history, modes, registries, blobs: new Map() };
+  return { cache, head, git, current: await skillTrees(git, head), history, age, modes, registries, blobs: new Map() };
 }
 
 // Only real GitHub remotes: https (userinfo allowed), scp-style git@, or ssh://git@. Anchoring the
@@ -183,7 +186,8 @@ export async function compareRepo({ template, folder, rev = 'origin/main', execu
 // Checkouts of a clone (its own folder and every linked worktree) whose committed skill copies are
 // an older template version than the repository's main. A session loads skills from its own
 // checkout, so a branch cut before a skill sync keeps running old copies while main looks current.
-// Copies edited in the branch are not past template trees and are left out. Read-only.
+// Copies edited in the branch are not past template trees and are left out, and so are skills the
+// checkout turns off. When main holds an edited copy, any past template copy counts as older. Read-only.
 export async function staleWorktrees({ template, folder, rev = 'origin/main', execute = run }) {
   const git = args => execute('git', ['-C', folder, ...args]);
   const main = await skillTrees(git, rev);
@@ -194,10 +198,12 @@ export async function staleWorktrees({ template, folder, rev = 'origin/main', ex
   for (const entry of entries) {
     if (!entry.worktree || !entry.HEAD || entry.bare || entry.prunable || !await exists(entry.worktree)) continue;
     const trees = await skillTrees(git, entry.HEAD);
+    const overrides = (await showJson(git, entry.HEAD, '.claude/settings.json'))?.skillOverrides ?? {};
     const skills = new Set();
     for (const part of PARTS) for (const [name, sha] of trees[part]) {
-      const current = template.current[part].get(name);
-      if (current && sha !== current && sha !== main[part].get(name) && template.history[part].get(name)?.has(sha)) skills.add(name);
+      const theirs = main[part].get(name), ages = template.age[part].get(name);
+      if (overrides[name] === 'off' || !theirs || sha === theirs || sha === template.current[part].get(name) || !ages?.has(sha)) continue;
+      if (!ages.has(theirs) || ages.get(theirs) < ages.get(sha)) skills.add(name);
     }
     if (!skills.size) continue;
     const where = path.resolve(entry.worktree);

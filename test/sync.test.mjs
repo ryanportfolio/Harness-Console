@@ -304,6 +304,10 @@ test('checkouts still on an older template copy than main are listed, edited cop
   // A worktree cut from main while alpha was v1; then main moves to the current alpha.
   const old = path.join(data.temp, 'wt-old');
   await run('git', ['-C', data.folder, 'worktree', 'add', '-q', '-b', 'feature', old, 'origin/main']);
+  // A second one turns alpha off, so its sessions never load the old copy.
+  const off = path.join(data.temp, 'wt-off');
+  await run('git', ['-C', data.folder, 'worktree', 'add', '-q', '-b', 'no-alpha', off, 'origin/main']);
+  await put(off, '.claude/settings.json', json({ skillOverrides: { epsilon: 'off', alpha: 'off' } })); await commit(off, 'alpha off');
   const pusher = path.join(data.temp, 'pusher'); await run('git', ['clone', '-q', data.remote, pusher]);
   await put(pusher, '.claude/skills/alpha/SKILL.md', 'alpha v2\n'); await put(pusher, '.agents/skills/alpha/SKILL.md', 'alpha native v2\n');
   await commit(pusher, 'sync alpha'); await run('git', ['-C', pusher, 'push', '-q', 'origin', 'main']);
@@ -316,8 +320,25 @@ test('checkouts still on an older template copy than main are listed, edited cop
   // The clone's own checkout was never pulled, so it is on the old alpha too; beta is edited, not old.
   const own = byPath[path.resolve(data.folder).toLowerCase()];
   assert.deepEqual(own.skills, ['alpha']); assert.equal(own.own, true);
+  assert.equal(byPath[path.resolve(off).toLowerCase()], undefined);
   // Once main is merged into the branch it drops off the list.
   await run('git', ['-C', old, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'merge', '-q', '--no-edit', 'origin/main']);
   const after = await staleWorktrees({ template: await data.opened(), folder: data.folder });
   assert.equal(after.some(entry => entry.path.toLowerCase() === path.resolve(old).toLowerCase()), false);
+});
+
+test('a checkout newer than an out-of-date main is not called stale', async t => {
+  const data = await fixture(t);
+  // Main keeps alpha v1; the worktree moves to v2; the template has since moved on to a v3.
+  const ahead = path.join(data.temp, 'wt-ahead');
+  await run('git', ['-C', data.folder, 'worktree', 'add', '-q', '-b', 'ahead', ahead, 'origin/main']);
+  await put(ahead, '.claude/skills/alpha/SKILL.md', 'alpha v2\n'); await put(ahead, '.agents/skills/alpha/SKILL.md', 'alpha native v2\n'); await commit(ahead, 'alpha v2');
+  const template = await data.opened();
+  const tree = async (dir, rev, part) => (await run('git', ['-C', dir, 'rev-parse', `${rev}:${part}/alpha`])).trim();
+  const v1 = { claude: await tree(data.folder, 'origin/main', '.claude/skills'), agents: await tree(data.folder, 'origin/main', '.agents/skills') };
+  const v2 = { claude: await tree(ahead, 'HEAD', '.claude/skills'), agents: await tree(ahead, 'HEAD', '.agents/skills') };
+  const v3 = { ...template, current: { ...template.current, '.claude/skills': new Map([...template.current['.claude/skills'], ['alpha', 'f'.repeat(40)]]), '.agents/skills': new Map([...template.current['.agents/skills'], ['alpha', 'e'.repeat(40)]]) },
+    age: { '.claude/skills': new Map([...template.age['.claude/skills'], ['alpha', new Map([['f'.repeat(40), 0], [v2.claude, 1], [v1.claude, 2]])]]), '.agents/skills': new Map([...template.age['.agents/skills'], ['alpha', new Map([['e'.repeat(40), 0], [v2.agents, 1], [v1.agents, 2]])]]) } };
+  const found = await staleWorktrees({ template: v3, folder: data.folder });
+  assert.equal(found.some(entry => entry.path.toLowerCase() === path.resolve(ahead).toLowerCase()), false);
 });
