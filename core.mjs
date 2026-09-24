@@ -52,10 +52,11 @@ export async function cloneMain({ root, id, source = `https://github.com/${valid
 
 const GIT_CRED = ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential'];
 const tidy = url => String(url || '').trim().replace(/\.git$/i, '').replace(/[\\/]+$/, '').toLowerCase();
-function sameRemote(url, id, source) {
+// Only GitHub's own host counts: https (optionally with credentials), scp-style git@ and ssh:// forms.
+export function sameRemote(url, id, source) {
   const clean = tidy(url);
   if (source && clean === tidy(source)) return true;
-  const match = clean.match(/github\.com[/:]([^/]+\/[^/]+)$/);
+  const match = clean.match(/^(?:https?:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+)$/);
   return Boolean(match && match[1] === id.toLowerCase());
 }
 

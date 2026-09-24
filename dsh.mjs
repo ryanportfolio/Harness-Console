@@ -312,6 +312,8 @@ export async function compareDsh({ skill, dest = DSH_DEFAULTS.dest }) {
     const current = await destState(dest, skill.name);
     await mkdir(path.join(scratch, 'dsh'), { recursive: true });
     if (current) await cp(current.path, path.join(scratch, 'dsh', path.basename(current.path)), { recursive: true });
+    // An install also moves a same-named flat <name>.md beside the folder, so the diff shows it too.
+    if (current?.flat && current.flat !== current.path) await cp(current.flat, path.join(scratch, 'dsh', path.basename(current.flat)));
     return await new Promise((resolve, reject) => {
       const child = spawn('git', ['diff', '--no-index', '--no-color', '--', 'dsh', 'incoming'], { cwd: scratch, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
       let out = '', err = ''; child.stdout.on('data', data => { out += data; }); child.stderr.on('data', data => { err += data; });

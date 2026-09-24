@@ -28,6 +28,12 @@ for (const a of config.accounts) a.dir = path.resolve(a.dir.replace(/^~(?=[\\/]|
   }
 }
 const STATE_DIR = path.join(here, ".state");
+// Before the tracker moved into usage/, its state lived at the repository root. Move it once:
+// token records outlive their transcripts, so a rescan cannot rebuild them.
+const LEGACY_STATE = path.join(here, "..", ".state");
+if (!(await stat(STATE_DIR).catch(() => null)) && (await stat(path.join(LEGACY_STATE, "tokens")).catch(() => null))) {
+  await rename(LEGACY_STATE, STATE_DIR).catch((e) => console.error(`could not move ${LEGACY_STATE} to ${STATE_DIR}: ${e.message}`));
+}
 await mkdir(STATE_DIR, { recursive: true });
 
 // 0 disables the timer: the account is fetched once at startup and after that only on /api/refresh.

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { cloneMain, localState, run, updateMain, validateRepo, github } from '../core.mjs';
+import { cloneMain, localState, run, sameRemote, updateMain, validateRepo, github } from '../core.mjs';
 
 async function fixture(t, branch = 'main') {
   const temp = await mkdtemp(path.join(tmpdir(), 'corewise-'));
@@ -54,4 +54,11 @@ test('updateMain fast-forwards a stale clone, switches back to main, and refuses
   assert.equal((await run('git', ['-C', destination, 'log', '-1', '--format=%s'])).trim(), 'local only');
   const state = await localState(data); assert.equal(state.git, true); assert.equal(state.matches, true); assert.deepEqual(state.dirty, []); assert.equal(state.behind, 1); assert.equal(state.ahead, 1);
   assert.deepEqual(await localState({ ...data, id: 'owner/absent' }), { destination: path.join(data.root, 'absent'), exists: false });
+});
+
+test('only GitHub itself counts as the matching origin', () => {
+  for (const url of ['https://github.com/owner/repo.git', 'https://x-access-token:tok@github.com/Owner/Repo', 'git@github.com:owner/repo.git', 'ssh://git@github.com/owner/repo'])
+    assert.equal(sameRemote(url, 'owner/repo'), true, url);
+  for (const url of ['https://evil.test/github.com/owner/repo.git', 'https://notgithub.com/owner/repo', 'git@evil.test:github.com/owner/repo', 'https://github.com.evil.test/owner/repo', 'https://github.com/owner/other'])
+    assert.equal(sameRemote(url, 'owner/repo'), false, url);
 });

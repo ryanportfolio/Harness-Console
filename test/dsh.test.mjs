@@ -177,3 +177,12 @@ test('an edit to a flat copy beside the folder after the preview blocks the inst
   assert.equal(late.result, 'skipped');
   assert.match(await readFile(path.join(data.dest, 'gamma.md'), 'utf8'), /edited after the preview/);
 });
+
+test('compare also shows a flat copy the install would move aside', { skip: !haveDsh && 'DSH is not installed' }, async t => {
+  const data = await fixture(t);
+  await put(data.dest, 'gamma.md', '---\nname: gamma\ndescription: Flat gamma copy that sits beside the folder.\n---\nFlat copy.\n');
+  const gamma = (await previewDsh(data.options)).skills.find(skill => skill.name === 'gamma');
+  const diff = await compareDsh({ skill: gamma, dest: data.dest });
+  assert.match(diff, /--- a\/dsh\/gamma\.md/);
+  assert.match(diff, /-Flat copy\./);
+});
