@@ -180,6 +180,32 @@ export async function compareRepo({ template, folder, rev = 'origin/main', execu
   return { harness, nativeCopies, skills: skills.sort((a, b) => a.name.localeCompare(b.name)) };
 }
 
+// Checkouts of a clone (its own folder and every linked worktree) whose committed skill copies are
+// an older template version than the repository's main. A session loads skills from its own
+// checkout, so a branch cut before a skill sync keeps running old copies while main looks current.
+// Copies edited in the branch are not past template trees and are left out. Read-only.
+export async function staleWorktrees({ template, folder, rev = 'origin/main', execute = run }) {
+  const git = args => execute('git', ['-C', folder, ...args]);
+  const main = await skillTrees(git, rev);
+  const entries = (await git(['worktree', 'list', '--porcelain']).catch(() => '')).split(/\r?\n\r?\n/).map(block => Object.fromEntries(block.split(/\r?\n/).filter(Boolean).map(line => {
+    const at = line.indexOf(' '); return at < 0 ? [line, true] : [line.slice(0, at), line.slice(at + 1)];
+  })));
+  const found = [];
+  for (const entry of entries) {
+    if (!entry.worktree || !entry.HEAD || entry.bare || entry.prunable || !await exists(entry.worktree)) continue;
+    const trees = await skillTrees(git, entry.HEAD);
+    const skills = new Set();
+    for (const part of PARTS) for (const [name, sha] of trees[part]) {
+      const current = template.current[part].get(name);
+      if (current && sha !== current && sha !== main[part].get(name) && template.history[part].get(name)?.has(sha)) skills.add(name);
+    }
+    if (!skills.size) continue;
+    const where = path.resolve(entry.worktree);
+    found.push({ path: where, own: where.toLowerCase() === path.resolve(folder).toLowerCase(), branch: entry.branch ? entry.branch.replace(/^refs\/heads\//, '') : null, head: entry.HEAD.slice(0, 7), skills: [...skills].sort() });
+  }
+  return found;
+}
+
 async function limit(items, size, work) {
   const results = new Array(items.length); let next = 0;
   await Promise.all(Array.from({ length: Math.min(size, items.length) }, async () => { while (next < items.length) { const index = next++; results[index] = await work(items[index]); } }));
@@ -194,7 +220,8 @@ export async function scanSkills({ root, execute = run, template: opened, cache,
     try {
       await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
       const head = (await execute('git', ['-C', clone.folder, 'rev-parse', 'origin/main'])).trim();
-      return { ...clone, head, ...await compareRepo({ template, folder: clone.folder, execute }) };
+      const worktrees = await staleWorktrees({ template, folder: clone.folder, execute }).catch(() => []);
+      return { ...clone, head, ...await compareRepo({ template, folder: clone.folder, execute }), worktrees };
     } catch (error) { return { ...clone, harness: true, error: reason(error) }; }
   });
   return { template: { id: TEMPLATE, head: template.head }, repos: repos.filter(repo => repo.harness).map(({ harness, nativeCopies, ...repo }) => repo) };

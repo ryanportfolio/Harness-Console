@@ -76,6 +76,8 @@ Nothing starts selected. Tick single skills, use a repository's **All updates an
 
 **Push to main** asks for a second click. For each repository it then checks the choices again against a fresh fetch, builds the change in a temporary Git worktree on \`origin/main\`, copies the skill folders and registry entries while keeping any Codex mode the repository already chose, runs the repository's own \`sync-codex-skills.mjs\` and \`check-skill-capabilities.mjs\`, and pushes one commit straight to \`main\`. A repository is skipped, with nothing pushed, when either script passed before the change and fails after it, or when GitHub's main moved. An edited skill that changed again on GitHub since the check is skipped. Your local folders, branches and uncommitted work are never changed; use **Update main** on the Repositories tab to pull the result.
 
+**Stale in worktrees** lists each checkout of a clone, the clone folder itself and every linked Git worktree, whose committed skill copies are an older template version than the repository's main. A session loads skills from its own checkout, so a branch cut before a skill sync keeps the old copies even when main is current. The list only reads Git metadata. Merge main into the branch to update it; copies edited in the branch are not listed.
+
 ### DSH skills
 
 Installs skills from the Harness-Firmware clone at \`~/CoreWise/Harness-Firmware\` into DSH's global skill folder, \`~/.dsh/skills\` (the \`DSH_HOME\` environment variable moves \`~/.dsh\`). Skills are read from that clone's \`origin/main\` after a fetch, so uncommitted and untracked files in the working folder never travel. Files that may hold secrets, caches and generated output are reported and skipped.

@@ -276,7 +276,7 @@ function syncRepoBlock(repo) {
     toggle.append(box, 'All updates and additions'); head.append(toggle);
   }
   const counts = document.createElement('p'); counts.className = 'sync-counts';
-  counts.textContent = [`${tally('same')} current`, tally('behind') && `${tally('behind')} behind`, tally('new') && `${tally('new')} new`, tally('removed') + tally('removed-edited') && `${tally('removed') + tally('removed-edited')} removed upstream`, tally('customized') && `${tally('customized')} edited here`, tally('off') && `${tally('off')} turned off`].filter(Boolean).join(', ');
+  counts.textContent = [`${tally('same')} current`, tally('behind') && `${tally('behind')} behind`, tally('new') && `${tally('new')} new`, tally('removed') + tally('removed-edited') && `${tally('removed') + tally('removed-edited')} removed upstream`, tally('customized') && `${tally('customized')} edited here`, tally('off') && `${tally('off')} turned off`, repo.worktrees?.length && `${repo.worktrees.length} ${repo.worktrees.length === 1 ? 'checkout' : 'checkouts'} on older skills`].filter(Boolean).join(', ');
   section.append(head, counts);
   for (const [status, label, checkable] of SYNC_GROUPS) {
     const skills = repo.skills.filter(skill => skill.status === status); if (!skills.length) continue;
@@ -287,13 +287,29 @@ function syncRepoBlock(repo) {
     else list.append(...skills.map(skill => { const span = document.createElement('span'); span.className = 'plain'; span.textContent = skill.name; return span; }));
     group.append(name, list); section.append(group);
   }
+  // Read-only: sessions started in these checkouts load older template copies than main has.
+  if (repo.worktrees?.length) {
+    const group = document.createElement('div'); group.className = 'sync-group';
+    const name = document.createElement('span'); name.textContent = 'Stale in worktrees';
+    const list = document.createElement('div');
+    for (const tree of repo.worktrees) {
+      const row = document.createElement('span'); row.className = 'sync-edited';
+      const b = document.createElement('b'); b.textContent = tree.own ? `this folder (${tree.branch ?? tree.head})` : tree.branch ?? `detached ${tree.head}`;
+      // A long list of alphabetical names hides the one that matters, so past six it becomes a count; hover shows all.
+      const shownSkills = tree.skills.length > 6 ? `${tree.skills.length} older skills` : tree.skills.join(', ');
+      row.title = tree.skills.join(', ');
+      row.append(b, `${tree.own ? '' : ` ${tree.path}`}: ${shownSkills}`); list.append(row);
+    }
+    const hint = document.createElement('span'); hint.className = 'sync-edited'; hint.textContent = 'Sessions in these checkouts load the older copies. Merge main into the branch to update them.';
+    list.append(hint); group.append(name, list); section.append(group);
+  }
   return section;
 }
 function renderSync() {
   const repos = sync.data.repos;
   const actionable = repos.filter(repo => !repo.error && repo.skills.some(skill => ['behind', 'new', 'removed', 'customized'].includes(skill.status)));
   // A repository whose only differences are local edits still gets a block, so those edits stay visible.
-  const shown = repos.filter(repo => !repo.error && repo.skills.some(skill => !['same', 'off'].includes(skill.status)));
+  const shown = repos.filter(repo => !repo.error && (repo.worktrees?.length || repo.skills.some(skill => !['same', 'off'].includes(skill.status))));
   const current = repos.filter(repo => !repo.error && !shown.includes(repo));
   const blocks = shown.map(syncRepoBlock);
   const line = (label, text) => { const p = document.createElement('p'); p.className = 'sync-current'; const span = document.createElement('span'); span.textContent = label; p.append(span, text); return p; };
