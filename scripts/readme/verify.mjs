@@ -15,7 +15,7 @@ const asset = (n) => fs.readFileSync(path.join(ROOT, "assets", "readme", n), "ut
 
 // Numbers each panel must carry, in every variant.
 const NEED = {
-  masthead: [`${F.claudePollSeconds} s`, `${F.codexPollSeconds} s`, `${F.tokenScanSeconds} s`, `${F.warnAt}%`, `${F.badAt}%`, `:${F.port}`, ...F.claudeWindows],
+  masthead: [F.claudePoll.label, F.codexPoll.label, ...(F.claudePoll.on && F.codexPoll.on ? [] : ["poll timer off"]), `${F.tokenScanSeconds} s`, `${F.warnAt}%`, `${F.badAt}%`, `:${F.port}`, `:${F.appPort}`, "Harness Console", ...F.claudeWindows],
 };
 for (const [name, needs] of Object.entries(NEED)) {
   for (const v of ["light", "dark", "narrow-light", "narrow-dark"]) {
@@ -40,7 +40,19 @@ for (const v of ["light", "narrow-light"]) {
 // README invariants.
 const md = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
 if (!md.startsWith(MARKER)) fail("README: generated marker missing from line 1");
-if (!/^## Run$/m.test(md) || !md.includes("node server.mjs")) fail("README: run section missing");
+// Text of one "## " section, or "" when it is missing.
+const section = (h) => md.split(/^## /m).find((s) => s.startsWith(`${h}\n`)) ?? "";
+if (!md.split("\n").some((l) => l.startsWith("Harness Console is "))) fail("README: lead does not name Harness Console");
+if (!section("Run").includes("node launcher.mjs")) fail("README: run section missing node launcher.mjs");
+if (!section("Usage tracker").includes("node usage/server.mjs")) fail("README: usage tracker section missing node usage/server.mjs");
+for (const tab of F.tabs) if (!section("App tabs").includes(`### ${tab}\n`)) fail(`README: app tab ${tab} has no section`);
+// Poll claims match the shipped config: a timer that is off must not be described as polling.
+const polling = section("Usage tracker");
+for (const [p, name] of [[F.claudePoll, "Claude"], [F.codexPoll, "Codex"]]) {
+  if (p.on && !polling.includes(`${name} is polled every ${p.seconds} seconds`)) fail(`README: ${name} poll interval ${p.seconds} s not stated`);
+  if (!p.on && !polling.includes(`so the ${name} timer is off`)) fail(`README: ${name} poll timer off not stated`);
+  if (!p.on && new RegExp(`${name}[^.]*(?:polled|polls) every`).test(md)) fail(`README: ${name} described as polling on a timer`);
+}
 if (!md.includes("(LICENSE)")) fail("README: license link missing");
 for (const m of md.matchAll(/(?:src|srcset)="(assets\/[^"]+)"/g)) if (!fs.existsSync(path.join(ROOT, m[1]))) fail(`README: missing asset ${m[1]}`);
 for (const e of F.endpoints) if (!md.includes(`${e.method} ${e.host}${e.path}`)) fail(`README: endpoint ${e.path} not listed`);

@@ -1,0 +1,28 @@
+/* Skill sync view: one hairline-ruled block per repository, skills as checkable words. */
+#syncView,#dshView{display:block;margin-top:40px;max-width:1432px}
+.sync-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap}
+.sync-note{max-width:65ch;font-size:16px;line-height:1.5;color:var(--bronze);margin:20px 0 30px}
+.sync-tools{display:flex;gap:26px;flex-wrap:wrap;margin:0 0 20px}
+.sync-repo{border-top:1px solid var(--ink);padding:20px 0 24px}
+.sync-repo-head{display:flex;align-items:baseline;gap:20px;flex-wrap:wrap}.sync-repo-head h2{font-size:24px}.sync-repo-head .pill{margin-right:auto}
+.sync-counts{font-size:14px;color:var(--bronze);margin:6px 0 0}
+.sync-group{display:grid;grid-template-columns:200px minmax(0,1fr);gap:10px;align-items:baseline;border-top:1px solid var(--wheat);padding:12px 0;margin-top:14px}
+.sync-group+.sync-group{margin-top:0}
+.sync-group>span{font-size:14px;letter-spacing:.06em;text-transform:uppercase;color:var(--bronze)}
+.sync-skills{display:flex;flex-wrap:wrap;gap:8px 22px;font-size:16px}
+.sync-skills label{display:inline-flex;align-items:center;gap:8px;cursor:pointer}
+.sync-skills .plain{color:var(--bronze)}
+.sync-edited{display:block;font-size:14px;color:var(--bronze);line-height:1.6}.sync-edited b{font-weight:500;color:var(--ink)}
+#syncView input[type=checkbox],#dshView input[type=checkbox]{display:grid;place-content:center;width:16px;height:16px;margin:0;appearance:none;border:1px solid var(--ink);background:transparent;cursor:pointer;flex-shrink:0}
+#syncView input[type=checkbox]::before,#dshView input[type=checkbox]::before{content:"";width:8px;height:8px;transform:scale(0);background:var(--ink)}
+#syncView input[type=checkbox]:checked::before,#dshView input[type=checkbox]:checked::before{transform:scale(1)}
+#syncView input[type=checkbox]:indeterminate::before,#dshView input[type=checkbox]:indeterminate::before{transform:scale(1);height:2px}
+#syncView input[type=checkbox]:disabled,#dshView input[type=checkbox]:disabled{border-color:var(--bronze);cursor:wait}
+.sync-toggle{display:inline-flex;align-items:center;gap:8px;font-size:14px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
+.sync-current{border-top:1px solid var(--ink);padding:20px 0;font-size:16px;line-height:1.6}.sync-current span{color:var(--bronze)}
+.sync-foot{position:sticky;bottom:0;background:var(--sand);border-top:1px solid var(--ink);padding:20px 0;display:flex;justify-content:space-between;align-items:baseline;gap:15px;flex-wrap:wrap}
+.sync-foot>span{font-size:14px;color:var(--bronze)}
+@media(max-width:760px){.sync-group{grid-template-columns:1fr}}
+.dsh-detail{display:block;font-size:14px;color:var(--bronze);line-height:1.6}.dsh-detail b{font-weight:500;color:var(--ink)}
+.dsh-conflict{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 18px;width:100%}
+.dsh-conflict .quiet{font-size:14px}

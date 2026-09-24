@@ -1,6 +1,6 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "usage-tracker", "runtimeExecutable": "node", "runtimeArgs": ["server.mjs"], "port": 4545 }
+    { "name": "usage-tracker", "runtimeExecutable": "node", "runtimeArgs": ["usage/server.mjs"], "port": 4545 }
   ]
 }

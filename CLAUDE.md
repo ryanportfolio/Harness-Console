@@ -10,7 +10,12 @@ You are a Senior Software Engineer. LLMs are probabilistic; code is deterministi
 
 ## What this project is
 
-<!-- FILL IN (via /init-project): two or three sentences — what this is and who it serves; a short "won't compromise on" list; optional glossary of terms the team uses. Cap ~10 lines: this file loads every turn, and direction earns its weight only while it stays short. A model that knows what the product refuses to compromise on tests for it without being told. -->
+Harness Console: one local Windows app (Node 24, no npm dependencies) for Harness Firmware repositories. `launcher.mjs` serves it on 127.0.0.1:43127 with tabs for cloning and updating repositories, creating projects from the Harness-Firmware template, syncing template skills into Harness clones, and installing skills into DSH. The usage tracker for Claude Code and Codex accounts lives in `usage/` and runs on port 4545.
+
+Won't compromise on:
+- Local only: loopback host and origin, per-session token for every change.
+- Never overwrite user work without a preview: dirty clones are refused, and an edited skill or changed DSH copy is replaced only after the user sees it and ticks it.
+- Verify UI changes in a real headed browser, not just `node --test`.
 
 ## Default prose mode: caveman ultra
 
