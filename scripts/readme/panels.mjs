@@ -1,4 +1,5 @@
-// README masthead, computed from the facts in facts.mjs.
+// README masthead, computed from the facts in facts.mjs. The title names the
+// whole app; the board below it shows the usage tracker's clocks.
 //
 // Conceit: a departures board. Everything the tracker reports is a clock:
 // rate-limit windows and their reset times, poll cadence, token expiry,
@@ -23,7 +24,7 @@
 // - Width: the narrow variant is a different composition, not a scaled copy.
 
 import { collectFacts } from "./facts.mjs";
-import { MONO, SERIF, THEMES, esc, monoWidth, svg, writeAsset } from "./lib.mjs";
+import { MONO, SERIF, THEMES, esc, monoWidth, serifWidth, svg, writeAsset } from "./lib.mjs";
 
 const F = collectFacts();
 
@@ -56,15 +57,18 @@ function css(t) {
 @media (prefers-reduced-motion:reduce){*{animation:none!important}.hand{stroke-dashoffset:0}}`;
 }
 
+// Alt-text wording for one provider's poll schedule.
+const pollPhrase = (p) => p.on ? `polled every ${p.seconds} seconds` : "fetched at startup, on page load and on Refresh now (poll timer off)";
+
 function boardRows() {
   const rows = [];
   rows.push({ group: "Claude Code", color: "claude", host: F.endpoints[0].host });
-  for (const w of F.claudeWindows) rows.push({ label: w, hours: [windowHours(w)], poll: `${F.claudePollSeconds} s`, source: F.endpoints[0].path, note: w.startsWith("Weekly ") ? "when the plan reports it" : "" });
+  for (const w of F.claudeWindows) rows.push({ label: w, hours: [windowHours(w)], poll: F.claudePoll.label, source: F.endpoints[0].path, note: w.startsWith("Weekly ") ? "when the plan reports it" : "" });
   rows.push({ group: "Codex", color: "codex", host: F.endpoints[3].host });
-  rows.push({ label: "Session (5h)", hours: [5], poll: `${F.codexPollSeconds} s`, source: F.endpoints[3].path, note: "" });
-  rows.push({ label: "Weekly", hours: [7 * 24], poll: `${F.codexPollSeconds} s`, source: F.endpoints[3].path, note: "" });
+  rows.push({ label: "Session (5h)", hours: [5], poll: F.codexPoll.label, source: F.endpoints[3].path, note: "" });
+  rows.push({ label: "Weekly", hours: [7 * 24], poll: F.codexPoll.label, source: F.endpoints[3].path, note: "" });
   rows.push({ group: "Tokens", color: null, host: "local transcripts" });
-  rows.push({ label: "Last 7 / 30 / 90 d", hours: [7 * 24, 30 * 24, 90 * 24], poll: `${F.tokenScanSeconds} s`, source: ".state/tokens/", note: "" });
+  rows.push({ label: "Last 7 / 30 / 90 d", hours: [7 * 24, 30 * 24, 90 * 24], poll: `${F.tokenScanSeconds} s`, source: "usage/.state/tokens/", note: "" });
   rows.push({ label: "Claude token refresh", hours: [], poll: "on expiry", source: F.endpoints[2].path, note: "the only write" });
   return rows;
 }
@@ -87,16 +91,18 @@ function masthead(t, narrow) {
   body.push(`<rect x="0.5" y="0.5" width="${W - 1}" height="HEIGHT" rx="${narrow ? 24 : 40}" class="card"/>`);
   body.push(`<g clip-path="url(#c)"><ellipse cx="${narrow ? W - 40 : W - 140}" cy="${narrow ? 30 : 40}" rx="${narrow ? 120 : 220}" ry="${narrow ? 60 : 90}" fill="url(#g)" filter="url(#w)"/></g>`);
 
-  body.push(`<text x="${px}" y="${y}" class="ttl" font-size="${narrow ? 36 : 48}">UsageTracker</text>`);
+  const title = "Harness Console";
+  if (serifWidth(title, narrow ? 36 : 48) > W - 2 * px) throw new Error(`panels: title "${title}" overflows the ${narrow ? "narrow" : "wide"} masthead`);
+  body.push(`<text x="${px}" y="${y}" class="ttl" font-size="${narrow ? 36 : 48}">${title}</text>`);
   y += narrow ? 30 : 36;
-  const sub = "Rate-limit windows, reset clocks and token totals for every Claude Code and Codex account on this machine, on one local page.";
+  const sub = "One local app for Harness Firmware repositories, plus a usage tracker: rate-limit windows, reset clocks and token totals for every Claude Code and Codex account on this machine.";
   const subSize = narrow ? 13 : 16;
   for (const line of wrap(sub, narrow ? W - 2 * px : 620, subSize)) { body.push(`<text x="${px}" y="${y}" class="bdy" font-size="${subSize}">${esc(line)}</text>`); y += subSize * 1.5; }
 
   // tags as pills
   y += narrow ? 14 : 18;
   let tx = px;
-  for (const tag of ["READ-ONLY", `127.0.0.1:${F.port}`, "0 DEPENDENCIES"]) {
+  for (const tag of [`APP :${F.appPort}`, `USAGE :${F.port}`, "0 DEPENDENCIES"]) {
     const p = pill(tx, y, tag, narrow ? 11 : 12);
     body.push(p.svg); tx += p.w + 8;
   }
@@ -158,9 +164,14 @@ function masthead(t, narrow) {
   y += narrow ? 26 : 28;
   const scale = `Clocks drain at ${SECONDS_PER_HOUR_OF_WINDOW} s per hour of window: a 5 h window empties every ${5 * SECONDS_PER_HOUR_OF_WINDOW} s, 7 days every ${168 * SECONDS_PER_HOUR_OF_WINDOW} s, 90 days every ${90 * 24 * SECONDS_PER_HOUR_OF_WINDOW} s.`;
   for (const line of wrap(scale, W - 2 * px, lsize)) { body.push(`<text x="${px}" y="${y}" class="mut" font-size="${lsize}">${esc(line)}</text>`); y += lsize * 1.5; }
+  if (!F.claudePoll.on || !F.codexPoll.on) {
+    y += lsize * 0.5;
+    const off = `on load: the shipped usage/accounts.json turns this poll timer off, so the tracker fetches once at startup, then on every page load and on Refresh now.`;
+    for (const line of wrap(off, W - 2 * px, lsize)) { body.push(`<text x="${px}" y="${y}" class="mut" font-size="${lsize}">${esc(line)}</text>`); y += lsize * 1.5; }
+  }
 
   const H = Math.ceil(y + (narrow ? 24 : 32));
-  const label = `UsageTracker schedule board: ${F.claudeWindows.length} Claude Code rate-limit windows polled every ${F.claudePollSeconds} seconds, 2 Codex windows polled every ${F.codexPollSeconds} seconds, token totals over 7, 30 and 90 days rescanned every ${F.tokenScanSeconds} seconds, and one write, the Claude token refresh.`;
+  const label = `Harness Console: the app on port ${F.appPort}, the usage tracker on port ${F.port}. Usage tracker schedule board: ${F.claudeWindows.length} Claude Code rate-limit windows ${pollPhrase(F.claudePoll)}, 2 Codex windows ${pollPhrase(F.codexPoll)}, token totals over 7, 30 and 90 days rescanned every ${F.tokenScanSeconds} seconds, and one write, the Claude token refresh.`;
   return svg(W, H, label, body.join("\n").replaceAll("HEIGHT", String(H - 1)), css(t));
 }
 

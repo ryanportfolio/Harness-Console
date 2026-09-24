@@ -16,21 +16,29 @@ function num(text, re, label) {
 }
 
 export function collectFacts() {
-  const server = read("server.mjs");
-  const tokens = read("tokens.mjs");
-  const pricing = read("pricing.mjs");
-  const page = read("index.html");
+  const server = read("usage/server.mjs");
+  const tokens = read("usage/tokens.mjs");
+  const pricing = read("usage/pricing.mjs");
+  const page = read("usage/index.html");
 
-  // accounts.json is committed and the server reads it with `config.X ?? literal`,
+  // usage/accounts.json is committed and the server reads it with `config.X ?? literal`,
   // so the README states the effective value, not the fallback.
-  const config = JSON.parse(read("accounts.json"));
+  const config = JSON.parse(read("usage/accounts.json"));
   const configured = (key, fallback) => {
     if (config[key] === undefined) return fallback;
-    if (!Number.isInteger(config[key]) || config[key] <= 0) throw new Error(`facts: accounts.json ${key} is not a positive integer`);
+    if (!Number.isInteger(config[key]) || config[key] < 0) throw new Error(`facts: usage/accounts.json ${key} is not a non-negative integer`);
     return config[key];
   };
-  const claudePollSeconds = configured("claudePollSeconds", num(server, /config\.claudePollSeconds \?\? (\d+)/, "claudePollSeconds"));
-  const codexPollSeconds = configured("codexPollSeconds", num(server, /config\.codexPollSeconds \?\? (\d+)/, "codexPollSeconds"));
+  // A poll interval of 0 turns that timer off: the server fetches once at startup,
+  // then only on /api/refresh (page load and "Refresh now").
+  const poll = (key) => {
+    const defaultSeconds = num(server, new RegExp(`config\\.${key} \\?\\? (\\d+)`), key);
+    const seconds = configured(key, defaultSeconds);
+    return { on: seconds > 0, seconds, defaultSeconds, label: seconds > 0 ? `${seconds} s` : "on load" };
+  };
+  if (!/if \(p\.pollMs > 0\) setTimeout\(tick, p\.pollMs\)/.test(server)) throw new Error("facts: usage/server.mjs no longer skips the poll timer at 0");
+  const claudePoll = poll("claudePollSeconds");
+  const codexPoll = poll("codexPollSeconds");
   const tokenScanSeconds = configured("tokenScanSeconds", num(server, /config\.tokenScanSeconds \?\? (\d+)/, "tokenScanSeconds"));
   const port = configured("port", num(server, /config\.port \?\? (\d+)/, "port"));
   const retentionDays = num(tokens, /RETENTION_MS = (\d+) \* 24 \* 3600 \* 1000/, "RETENTION_MS");
@@ -57,10 +65,10 @@ export function collectFacts() {
 
   // The token refresh is the only POST the server makes.
   const posts = (server.match(/method: "POST"/g) ?? []).length;
-  if (posts !== 1) throw new Error(`facts: expected exactly one POST in server.mjs, found ${posts}`);
+  if (posts !== 1) throw new Error(`facts: expected exactly one POST in usage/server.mjs, found ${posts}`);
 
   // No dependencies: every import is a node: builtin or a local file.
-  const sources = ["server.mjs", "tokens.mjs", "pricing.mjs"];
+  const sources = ["usage/server.mjs", "usage/tokens.mjs", "usage/pricing.mjs"];
   for (const f of sources) {
     for (const m of read(f).matchAll(/^import .* from "([^"]+)";/gm)) {
       if (!m[1].startsWith("node:") && !m[1].startsWith("./")) throw new Error(`facts: ${f} imports ${m[1]}; README claims zero dependencies`);
@@ -68,7 +76,20 @@ export function collectFacts() {
   }
   if (fs.existsSync(path.join(ROOT, "package.json"))) throw new Error("facts: package.json exists; README claims zero dependencies");
 
-  const lines = [...sources, "index.html"].reduce((n, f) => n + read(f).split("\n").filter((l) => l.trim()).length, 0);
+  // The app at the root follows the same rule; its files use single quotes.
+  const appSources = ["launcher.mjs", "server.mjs", "core.mjs", "harness.mjs", "sync.mjs", "dsh.mjs"];
+  for (const f of appSources) {
+    for (const m of read(f).matchAll(/^import .* from ['"]([^'"]+)['"];/gm)) {
+      if (!m[1].startsWith("node:") && !m[1].startsWith("./")) throw new Error(`facts: ${f} imports ${m[1]}; README claims zero dependencies`);
+    }
+  }
+  const launcher = read("launcher.mjs");
+  const appPort = num(launcher, /launchHarnessConsole\(\{ port = (\d+)/, "app port");
+  if (!/Number\(process\.env\.USAGE_PORT\)/.test(launcher) || !/Number\(process\.env\.USAGE_PORT\)/.test(server)) throw new Error("facts: USAGE_PORT override missing from launcher.mjs or usage/server.mjs");
+  const tabs = [...read("public/index.html").matchAll(/role="tab"[^>]*>([^<]+)<\/button>/g)].map((m) => m[1]);
+  if (tabs.length !== 5) throw new Error(`facts: expected 5 app tabs, found ${tabs.length}`);
+
+  const lines = [...sources, "usage/index.html"].reduce((n, f) => n + read(f).split("\n").filter((l) => l.trim()).length, 0);
 
   const host = (u) => new URL(u).host;
   const endpoints = [
@@ -81,8 +102,8 @@ export function collectFacts() {
   ];
 
   return {
-    claudePollSeconds, codexPollSeconds, tokenScanSeconds, port, retentionDays, codexExpiryWarnHours,
+    claudePoll, codexPoll, tokenScanSeconds, port, retentionDays, codexExpiryWarnHours,
     pageFetchSeconds, countdownSeconds, warnAt, badAt, pricingTtlHours, claudeWindows, endpoints, lines,
-    sourceFiles: sources.length + 1,
+    sourceFiles: sources.length + 1, appPort, tabs,
   };
 }

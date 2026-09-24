@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Harness Console</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/new-project.css"><link rel="stylesheet" href="/sync.css"><script src="/app.js" defer></script></head>
+<body><div class="shell"><aside><a class="brand" href="/"><span class="mark">H</span>Harness Console<span class="tag">LOCAL</span></a><div class="account"><span class="dot" id="dot"></span><div><strong id="account">Connecting…</strong><small id="accountHint">GitHub account</small></div><button id="login" class="quiet" hidden>Sign in</button></div><div class="list-head"><h2>Repositories <span id="count">0</span></h2><button id="refresh" class="quiet" aria-label="Refresh repositories">↻</button></div><label class="search"><span>⌕</span><input id="search" type="search" placeholder="Find a repository" aria-label="Find a repository"></label><div id="repoList" class="repo-list" aria-label="Repositories"></div><div class="aside-foot"><span class="dot"></span>Files stay on your computer</div></aside><main><header><nav class="tabs" role="tablist" aria-label="Views"><button id="tabUsage" role="tab" aria-selected="true" aria-controls="usage">Usage</button><button id="tabRepos" role="tab" aria-selected="false" aria-controls="repoView">Repositories</button><button id="tabNew" role="tab" aria-selected="false" aria-controls="newView">New project</button><button id="tabSync" role="tab" aria-selected="false" aria-controls="syncView">Skill sync</button><button id="tabDsh" role="tab" aria-selected="false" aria-controls="dshView">DSH skills</button></nav></header><section id="usage" role="tabpanel"><div id="usageWait" class="empty"><div class="empty-icon">◔</div><h1>Starting the usage tracker</h1><p>Waiting for the dashboard<span id="usageWaitUrl"></span>. It starts with Harness Console; if this never clears, run <code>node usage/server.mjs</code> in the Harness Console folder.</p></div><iframe id="usageFrame" title="Usage tracker" hidden></iframe></section><div id="repoView" role="tabpanel" hidden><div id="notice" role="alert" hidden></div><section id="empty" class="empty"><div class="empty-icon">↙</div><h1>Your next project,<br>ready to work on</h1><p>Choose a repository to bring its main branch into your CoreWise folder.</p></section><section id="detail" hidden><div class="eyebrow" id="owner"></div><div class="title-row"><h1 id="name"></h1><span id="visibility" class="pill"></span><a id="repoLink" class="quiet" target="_blank" rel="noopener noreferrer">Open on GitHub</a></div><p id="description" class="description"></p><div class="metadata"><span id="language"></span><span id="updated"></span></div><div class="clone-card"><div class="card-heading"><span class="branch-icon">⑂</span><div><h2 id="cardTitle">Clone repository</h2><p id="cardHint">A working copy, ready for your changes.</p></div></div><div class="field"><span>BRANCH</span><strong class="branch">⑂ main</strong></div><div class="field"><span>DESTINATION</span><code id="destination"></code></div><div class="card-footer"><span id="localState"></span><button id="clone" class="primary">Clone main <span>↓</span></button></div></div></section><section id="activity" class="activity" hidden aria-live="polite"><div class="activity-heading"><h2 id="activityTitle">Cloning main</h2><span id="jobState" class="pill"></span></div><pre id="log" tabindex="0"></pre></section></div>
+<div id="newView" class="phosphor" role="tabpanel" hidden>
+  <section class="creator-panel is-loading" aria-labelledby="form-title">
+    <div class="panel-head"><p>CREATE / GITHUB + LOCAL</p><h2 id="form-title">Name your repo</h2></div>
+    <div class="creator-state-stack">
+      <div class="connection" id="connection" aria-live="polite">
+        <span aria-hidden="true"></span>
+        <div><strong>Checking creator</strong><p>Looking for a GitHub connection</p></div>
+        <button class="skill-trigger" id="skillTrigger" type="button" aria-controls="skillPicker" aria-expanded="false" aria-label="Customize skills" hidden disabled><span>Skills</span><output id="skillCount" aria-live="polite">Loading</output><span>Customize -&gt;</span></button>
+      </div>
+      <div class="creator-skeleton" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <form id="newForm" hidden>
+        <div class="nf-field"><label for="repoName">Repository name</label><span class="input-shell"><input id="repoName" name="name" placeholder="my-new-project" pattern="[A-Za-z0-9._\-]+" maxlength="100" autocomplete="off" spellcheck="false" required><span class="type-cue" aria-hidden="true">TYPE<span></span></span></span></div>
+        <div class="nf-field"><label for="repoDescription">Description <small>optional</small></label><span class="input-shell"><input id="repoDescription" name="description" maxlength="350" placeholder="What are you building" autocomplete="off"><span class="type-cue" aria-hidden="true">TYPE<span></span></span></span></div>
+        <label class="visibility" for="repoPrivate"><input id="repoPrivate" name="private" type="checkbox" checked><span><strong>Private repository</strong><small>Recommended for a new project</small></span></label>
+        <button class="action go" type="submit" id="createButton" aria-busy="false"><span data-action-label>Create repository</span><span data-action-glyph aria-hidden="true">-&gt;</span></button>
+        <p class="nf-destination" id="newDestination"></p>
+      </form>
+      <div class="fallback" id="newFallback" hidden>
+        <button class="action go" id="connectButton" type="button"><span>Connect GitHub</span><span>-&gt;</span></button>
+        <a class="text-link" href="https://github.com/ryanportfolio/Harness-Firmware/generate" target="_blank" rel="noreferrer">Use GitHub template instead</a>
+      </div>
+      <div class="success" id="newSuccess" hidden>
+        <p>PROJECT READY</p>
+        <h2 id="successName">Repository created</h2>
+        <p class="success-summary" id="successSummary"></p>
+        <ol class="next-steps" aria-label="Next steps">
+          <li><span class="step-number">01</span><span class="step-copy">Add your framework or first project files</span></li>
+          <li><span class="step-number">02</span><span class="step-copy">Run <a class="skill-ref" href="https://github.com/ryanportfolio/Harness-Firmware/blob/main/.claude/skills/init-project/SKILL.md" target="_blank" rel="noreferrer">init-project</a> so it can detect the stack</span></li>
+        </ol>
+        <div class="success-actions">
+          <a class="action go" id="successLink" href="#" target="_blank" rel="noreferrer"><span>Open on GitHub</span><span>-&gt;</span></a>
+          
+          <button class="text-button" id="createAnother" type="button">Create another</button>
+        </div>
+      </div>
+      <pre class="creator-log" id="newLog" tabindex="0" hidden></pre>
+      <p class="error" id="newError" role="alert"></p>
+    </div>
+  </section>
+</div>
+<div id="syncView" role="tabpanel" hidden>
+  <div class="sync-head"><div><div class="eyebrow" id="syncTemplate">Harness-Firmware main</div><h1>Skill sync</h1></div><button id="syncScan" class="primary" type="button">Check repositories <span>↻</span></button></div>
+  <p id="syncNote" class="sync-note">Compares each Harness repository cloned in your CoreWise folder with the template on GitHub. Skills edited in that repository stay as they are unless you choose to replace them with the template copy. Changes are pushed straight to main; your local folders are not touched.</p>
+  <div id="syncTools" class="sync-tools" hidden><button id="syncSelectAll" class="quiet" type="button">Select all updates and additions</button><button id="syncClearAll" class="quiet" type="button">Unselect all</button></div>
+  <div id="syncRepos"></div>
+  <div id="syncFoot" class="sync-foot" hidden><span id="syncSummary"></span><button id="syncApply" class="primary" type="button">Push to main <span>↑</span></button></div>
+  <section id="syncActivity" class="activity" hidden aria-live="polite"><div class="activity-heading"><h2 id="syncActivityTitle">Syncing skills</h2><span id="syncJobState" class="pill"></span></div><pre id="syncLog" tabindex="0"></pre></section>
+</div>
+<div id="dshView" role="tabpanel" hidden>
+  <div class="sync-head"><div><div class="eyebrow" id="dshSource">Harness-Firmware main</div><h1>DSH skills</h1></div><button id="dshScan" class="primary" type="button">Check DSH skills <span>↻</span></button></div>
+  <p class="sync-note">Installs skills from the Harness-Firmware checkout in your CoreWise folder into the DSH global skill folder, read from its main branch on GitHub after a fetch. Nothing is pushed or uploaded. A skill changed in DSH is only replaced when you pick it, and its old copy is backed up unless you turn that off.</p>
+  <div id="dshTools" class="sync-tools" hidden><button id="dshSelectAll" class="quiet" type="button">Select all new and updates</button><button id="dshClearAll" class="quiet" type="button">Unselect all</button></div>
+  <div id="dshList"></div>
+  <section id="dshCompare" class="activity" hidden><div class="activity-heading"><h2 id="dshCompareTitle">Compare</h2><button id="dshCompareClose" class="quiet" type="button">Close</button></div><pre id="dshDiff" tabindex="0"></pre></section>
+  <div id="dshFoot" class="sync-foot" hidden><span id="dshSummary"></span><button id="dshApply" class="primary" type="button">Install in DSH <span>↓</span></button></div>
+  <section id="dshActivity" class="activity" hidden aria-live="polite"><div class="activity-heading"><h2 id="dshActivityTitle">Installing skills</h2><span id="dshJobState" class="pill"></span></div><pre id="dshLog" tabindex="0"></pre></section>
+</div>
+<footer></footer></main></div>
+<dialog class="skill-picker phosphor" id="skillPicker" aria-labelledby="skillPickerTitle">
+  <div class="skill-picker-shell">
+    <header class="skill-picker-head"><div><p>HARNESS LOADOUT / REPOSITORY CONTENTS</p><h2 id="skillPickerTitle">Choose active skills</h2></div><button class="skill-picker-close" id="skillPickerClose" type="button" aria-label="Close skill selector">CLOSE ×</button></header>
+    <div class="skill-picker-tools" aria-label="Skill selection controls"><button id="skillsEnableAll" type="button">Enable all</button><button id="skillsClearOptional" type="button">Clear optional</button><p>Deselected skills are omitted from the generated repository</p></div>
+    <div class="skill-groups" id="skillGroups"></div>
+    <footer class="skill-picker-foot"><div><output id="skillPickerCount" aria-live="polite"></output><small><strong>init-project</strong> stays enabled for setup after scaffolding</small></div><button class="action go" id="skillsDone" type="button"><span>Use selection</span><span>-&gt;</span></button></footer>
+  </div>
+</dialog>
+</body></html>

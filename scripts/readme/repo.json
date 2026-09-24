@@ -1,15 +1,21 @@
 {
-  "description": "One local page for every Claude Code and Codex account on this machine: rate-limit windows, reset clocks, and token totals over 7, 30 or 90 days. Node only, no dependencies.",
+  "description": "Harness Console: local app for Harness Firmware repositories: clone and update from GitHub, create projects from the template, sync template skills into Harness clones, install skills into DSH. Includes a usage tracker for Claude Code and Codex rate limits and token totals. Node only, no dependencies.",
   "homepage": "",
   "topics": [
+    "harness-firmware",
     "claude-code",
     "codex",
     "openai-codex",
     "anthropic",
+    "github-cli",
+    "git",
+    "skills",
+    "agent-skills",
     "rate-limits",
     "token-usage",
     "usage-dashboard",
     "nodejs",
-    "local-first"
+    "local-first",
+    "windows"
   ]
 }
