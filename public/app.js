@@ -56,6 +56,7 @@ async function refresh() {
   notice(); $('refresh').disabled = true;
   try {
     const state = await api('status'); token = state.token; root = state.root; account = state; renderConnection();
+    const build = state.build; $('build').textContent = !build ? '' : build.note ? `Build ${build.head ?? 'unknown'}. ${build.note}` : `Build ${build.head}, up to date with GitHub`;
     $('account').textContent = state.connected ? state.login : state.needsLogin === false ? 'GitHub unavailable' : 'Connect GitHub'; $('accountHint').textContent = state.connected ? 'GitHub connected' : state.needsLogin === false ? 'Check connection and refresh' : 'Use your GitHub account'; $('login').hidden = state.connected || state.needsLogin === false;
     if (!state.connected) { repos = []; list(); notice(state.error || 'Sign in to browse your public and private repositories.'); return; }
     repos = (await api('repos')).repos;
@@ -300,7 +301,7 @@ function syncRepoBlock(repo) {
       row.title = tree.skills.join(', ');
       row.append(b, `${tree.own ? '' : ` ${tree.path}`}: ${shownSkills}`); list.append(row);
     }
-    const hint = document.createElement('span'); hint.className = 'sync-edited'; hint.textContent = 'Sessions in these checkouts load the older copies. Merge main into a worktree's branch; for this folder on main, use Update main on the Repositories tab.';
+    const hint = document.createElement('span'); hint.className = 'sync-edited'; hint.textContent = "Sessions in these checkouts load the older copies. Merge main into a worktree's branch; for this folder on main, use Update main on the Repositories tab.";
     list.append(hint); group.append(name, list); section.append(group);
   }
   return section;

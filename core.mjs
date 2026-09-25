@@ -50,7 +50,7 @@ export async function cloneMain({ root, id, source = `https://github.com/${valid
   }
 }
 
-const GIT_CRED = ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential'];
+export const GIT_CRED = ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential'];
 const tidy = url => String(url || '').trim().replace(/\.git$/i, '').replace(/[\\/]+$/, '').toLowerCase();
 // Only GitHub's own host counts: https (optionally with credentials), scp-style git@ and ssh:// forms.
 export function sameRemote(url, id, source) {

@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
+import { run } from '../core.mjs';
 import { createApp } from '../server.mjs';
-import { launchHarnessConsole, parseListeningPid, isTrackerCommandLine } from '../launcher.mjs';
+import { launchHarnessConsole, parseListeningPid, isTrackerCommandLine, isAnyTrackerCommandLine, selfUpdate } from '../launcher.mjs';
 
 const close = server => new Promise(resolve => server.close(resolve));
 
@@ -146,4 +150,52 @@ test('quoted and unquoted text glued together is one argument, as Windows parses
   assert(isTrackerCommandLine(`${node} C:\\Users\\me\\CoreWise\\harness-console\\"usage\\server.mjs"`, dir));
   assert(isTrackerCommandLine(`${node} ${tracker}`, dir));
   assert(isTrackerCommandLine(`${node} "${tracker}"`, dir));
+});
+
+test('any node server.mjs counts as a tracker to replace, so a tracker from an old checkout is stopped too', () => {
+  const node = '"C:\\Program Files\\nodejs\\node.exe"';
+  assert(isAnyTrackerCommandLine(`${node} C:\\Users\\me\\CoreWise\\UsageTracker\\server.mjs`));
+  assert(isAnyTrackerCommandLine(`${node} "C:\\Users\\me\\CoreWise\\Harness-Console\\usage\\SERVER.MJS"`));
+  assert(isAnyTrackerCommandLine('node c:/users/me/corewise/usagetracker/server.mjs'));
+  assert(!isAnyTrackerCommandLine(`${node} C:\\Users\\me\\CoreWise\\UsageTracker\\other.mjs`));
+  assert(!isAnyTrackerCommandLine(`${node} -e "1" C:\\x\\server.mjs`));
+  assert(!isAnyTrackerCommandLine(`${node} --test C:\\x\\server.mjs`));
+  assert(!isAnyTrackerCommandLine('C:\\Tools\\python.exe C:\\x\\server.mjs'));
+  assert(!isAnyTrackerCommandLine(node));
+  assert(!isAnyTrackerCommandLine(null));
+});
+
+test('selfUpdate fast-forwards a clean main and refuses a branch, uncommitted edits, or local commits', async t => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'harness-self-'));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const source = path.join(temp, 'source'), dir = path.join(temp, 'clone');
+  const commit = (cwd, name) => run('git', ['-C', cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qam', name]);
+  await mkdir(source); await run('git', ['init', '-q', '-b', 'main', source]);
+  await writeFile(path.join(source, 'app.txt'), 'v1'); await run('git', ['-C', source, 'add', 'app.txt']); await commit(source, 'v1');
+  await run('git', ['clone', '-q', source, dir]);
+  const head = async cwd => (await run('git', ['-C', cwd, 'rev-parse', '--short', 'HEAD'])).trim();
+
+  assert.deepEqual(await selfUpdate({ dir }), { head: await head(dir), moved: false, note: null });
+  await writeFile(path.join(source, 'app.txt'), 'v2'); await commit(source, 'v2');
+  const moved = await selfUpdate({ dir });
+  assert.equal(moved.moved, true); assert.equal(moved.head, await head(source)); assert.equal(moved.note, null);
+
+  await writeFile(path.join(source, 'app.txt'), 'v3'); await commit(source, 'v3');
+  await writeFile(path.join(dir, 'app.txt'), 'edited');
+  const dirty = await selfUpdate({ dir });
+  assert.equal(dirty.moved, false); assert.match(dirty.note, /Uncommitted changes/); assert.notEqual(dirty.head, await head(source));
+  await run('git', ['-C', dir, 'checkout', '-q', '--', 'app.txt']);
+
+  await run('git', ['-C', dir, 'checkout', '-qb', 'feature']);
+  assert.match((await selfUpdate({ dir })).note, /On branch feature/);
+  await run('git', ['-C', dir, 'checkout', '-q', 'main']);
+
+  await writeFile(path.join(dir, 'app.txt'), 'local'); await commit(dir, 'local');
+  const diverged = await selfUpdate({ dir });
+  assert.equal(diverged.moved, false); assert.match(diverged.note, /commits GitHub does not/);
+
+  await run('git', ['-C', dir, 'remote', 'set-url', 'origin', path.join(temp, 'missing')]);
+  await run('git', ['-C', dir, 'reset', '-q', '--hard', 'origin/main']);
+  assert.match((await selfUpdate({ dir })).note, /GitHub not reachable/);
+  assert.match((await selfUpdate({ dir: path.join(temp, 'nothing') })).note, /Not a Git checkout/);
 });
