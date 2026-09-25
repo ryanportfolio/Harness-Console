@@ -124,6 +124,9 @@ export async function selfUpdate({ dir = here, execute = run } = {}) {
   const before = (await git('rev-parse', 'HEAD')).trim();
   try { await git(...GIT_CRED, 'fetch', '--quiet', 'origin', 'main'); }
   catch { return skip('GitHub not reachable, so this is the copy on disk.'); }
+  // A main that is only ahead fast-forwards to itself, so check for local-only commits first.
+  const ahead = Number((await git('rev-list', '--count', 'origin/main..HEAD').catch(() => '0')).trim());
+  if (ahead) return skip('Local main has commits GitHub does not, so it did not update.');
   try { await git('merge', '--ff-only', '--quiet', 'origin/main'); }
   catch { return skip('Local main has commits GitHub does not, so it did not update.'); }
   return { head: await short(), moved: before !== (await git('rev-parse', 'HEAD')).trim(), note: null };
@@ -160,13 +163,34 @@ export async function launchHarnessConsole({ port = 43127, createServer = create
   return { reused: false, origin, server };
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  // Pull first. When main moved, this process holds the old code, so it hands off to a fresh
-  // launcher that loads the new files; that run finds nothing new and starts the app.
-  const build = await selfUpdate();
-  if (build.moved && !process.env.HARNESS_CONSOLE_RELAUNCHED) {
-    spawn(process.execPath, [fileURLToPath(import.meta.url)], { env: { ...process.env, HARNESS_CONSOLE_RELAUNCHED: '1' }, detached: true, windowsHide: true, shell: false, stdio: 'ignore' }).unref();
-    process.exit(0);
+// Runs this launcher again in a child that shares the terminal, so the new files load while
+// Ctrl+C, output and the exit code still pass through this process.
+function relaunchSelf() {
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], { env: { ...process.env, HARNESS_CONSOLE_RELAUNCHED: '1' }, windowsHide: true, shell: false, stdio: 'inherit' });
+    child.on('error', error => { console.error(`Could not restart on the updated code: ${error.message}`); resolve({ relaunched: true, code: 1 }); });
+    child.on('exit', code => resolve({ relaunched: true, code: code ?? 1 }));
+  });
+}
+
+// The launch entry point. A running instance is stopped before the checkout changes, because it
+// reads public/ from disk and would mix new pages with its old handlers; a busy one keeps its
+// files and is only reopened. Then pull; when main moved, this process holds the old code, so
+// it hands off to a fresh launcher that finds nothing new and starts the app.
+export async function startLatest({ port = 43127, update = selfUpdate, relaunch = relaunchSelf, launch = launchHarnessConsole, tracker = ensureUsageTracker, env = process.env } = {}) {
+  const origin = `http://127.0.0.1:${port}`;
+  if (await isHarnessConsole(origin)) {
+    if (!await quitRunning(origin)) return launch({ port, tracker });
+    for (let i = 0; i < 50 && await isHarnessConsole(origin); i++) await sleep(100);
   }
-  launchHarnessConsole({ tracker: ensureUsageTracker, createServer: () => createApp({ build }) }).then(result => console.log(`${result.reused ? 'Opened' : 'Started'} Harness Console: ${result.origin}`)).catch(error => { console.error(error.message); process.exitCode = 1; });
+  const build = await update();
+  if (build.moved && !env.HARNESS_CONSOLE_RELAUNCHED) return relaunch();
+  return launch({ port, tracker, createServer: () => createApp({ build }) });
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  startLatest().then(result => {
+    if (result.relaunched) process.exitCode = result.code;
+    else console.log(`${result.reused ? 'Opened' : 'Started'} Harness Console: ${result.origin}`);
+  }).catch(error => { console.error(error.message); process.exitCode = 1; });
 }
