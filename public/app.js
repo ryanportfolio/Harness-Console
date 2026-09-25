@@ -268,7 +268,7 @@ function syncRepoBlock(repo) {
   const section = document.createElement('section'); section.className = 'sync-repo';
   const head = document.createElement('div'); head.className = 'sync-repo-head';
   const title = document.createElement('h2'); title.textContent = repo.name;
-  const id = document.createElement('span'); id.className = 'pill'; id.textContent = repo.id;
+  const id = document.createElement('a'); id.className = 'pill'; id.textContent = repo.id; id.href = 'https://github.com/' + repo.id.split('/').map(encodeURIComponent).join('/'); id.target = '_blank'; id.rel = 'noopener noreferrer'; id.setAttribute('aria-label', `Open ${repo.id} on GitHub (new tab)`);
   head.append(title, id);
   const tally = status => repo.skills.filter(skill => skill.status === status).length;
   if (tally('behind') + tally('new')) {
