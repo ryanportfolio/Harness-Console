@@ -13,7 +13,7 @@ import { TRACKER } from './launcher.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/new-project.css': ['new-project.css', 'text/css'], '/sync.css': ['sync.css', 'text/css'] };
-export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapter = github(), clone = cloneMain, update = updateMain, local = localState, create = createProject, catalog = skillCatalog, scan = scanSkills, sync = applySkills, dshPreview = previewDsh, dshInstall = installDsh, dshCompare = compareDsh, preferences = path.join(homedir(), '.corewise-cloner', 'preferences.json') } = {}) {
+export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapter = github(), clone = cloneMain, update = updateMain, local = localState, create = createProject, catalog = skillCatalog, scan = scanSkills, sync = applySkills, dshPreview = previewDsh, dshInstall = installDsh, dshCompare = compareDsh, preferences = path.join(homedir(), '.corewise-cloner', 'preferences.json'), build = null } = {}) {
   const token = randomBytes(32).toString('hex');
   let repos = [], lastSelected = null, job = null, skills = null, lastScan = null, lastDsh = null;
   // DSH installs read the local Harness-Firmware checkout; the preview keeps the rendered bytes,
@@ -44,7 +44,7 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
         try { up = (await fetch(`${trackerUrl}/api/usage`, { signal: AbortSignal.timeout(1500) })).ok; } catch {}
         return reply(res, 200, { up, url: trackerUrl });
       }
-      if (req.method === 'GET' && url.pathname === '/api/status') return reply(res, 200, { ...await adapter.account(), root, token, lastSelected });
+      if (req.method === 'GET' && url.pathname === '/api/status') return reply(res, 200, { ...await adapter.account(), root, token, lastSelected, build });
       if (req.method === 'GET' && url.pathname === '/api/repos') { repos = await adapter.repositories(); return reply(res, 200, { repos }); }
       if (req.method === 'GET' && url.pathname === '/api/skills') {
         try { return reply(res, 200, await loadSkills()); }

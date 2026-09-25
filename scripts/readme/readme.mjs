@@ -44,7 +44,9 @@ node launcher.mjs
 
 The launcher serves the app at http://127.0.0.1:${F.appPort}, starts the usage tracker on port ${F.port} when nothing answers there, and opens the app in your browser. The \`USAGE_PORT\` environment variable changes the tracker port for both the launcher and \`usage/server.mjs\`.
 
-Every launch starts fresh, so code edits load. A Harness Console already on port ${F.appPort} is asked to quit and is replaced, and a tracker running from this folder's \`usage/server.mjs\` is stopped and started again. When the running app is in the middle of an operation (clone, update, create, skill sync or DSH install), the launcher keeps it and only opens a new tab. Another service on port ${F.appPort} is left running and the launcher exits with an error; another tracker already answering on port ${F.port} is reused.
+Every launch runs GitHub's latest main. The launcher first stops a running Harness Console, then fetches \`origin/main\`, fast-forwards this folder, and starts the updated code. It skips the update and runs the copy on disk when the folder is on another branch, has uncommitted changes, holds commits GitHub does not, or GitHub is unreachable; the page footer shows the running build and, after a skip, the reason.
+
+Every launch then starts fresh. A Harness Console already on port ${F.appPort} is asked to quit and is replaced, and any usage tracker on port ${F.port} (a \`node server.mjs\` answering \`/api/usage\`, including one started from an older checkout) is stopped and started again from \`usage/\`. When the running app is in the middle of an operation (clone, update, create, skill sync or DSH install), the launcher keeps it, leaves the folder as it is, and only opens a new tab. Another service on port ${F.appPort} is left running and the launcher exits with an error; any other service answering on port ${F.port} is reused.
 
 Select **Quit app** at the bottom of the page to stop Harness Console, and with it the tracker if this launch started it. Closing the browser tab leaves both running. In a terminal, Ctrl+C stops the launcher.
 

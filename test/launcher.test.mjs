@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
+import { run } from '../core.mjs';
 import { createApp } from '../server.mjs';
-import { launchHarnessConsole, parseListeningPid, isTrackerCommandLine } from '../launcher.mjs';
+import { launchHarnessConsole, parseListeningPid, isTrackerCommandLine, isAnyTrackerCommandLine, selfUpdate, startLatest } from '../launcher.mjs';
 
 const close = server => new Promise(resolve => server.close(resolve));
 
@@ -65,6 +69,34 @@ test('launcher reuses the earliest CoreWise build without restarting it', async 
   t.after(() => close(legacy));
   const result = await launchHarnessConsole({ port: legacy.address().port, open: () => {} });
   assert.equal(result.reused, true);
+});
+
+test('startLatest leaves the files alone while a running instance refuses to quit', async t => {
+  const legacy = http.createServer((req, res) => {
+    if (req.url === '/api/health') { res.writeHead(404); res.end('{}'); }
+    else res.end('<title>CoreWise · Repositories</title><div id="repoList"></div><button id="clone"></button>');
+  });
+  await new Promise(resolve => legacy.listen(0, '127.0.0.1', resolve));
+  t.after(() => close(legacy));
+  const calls = [];
+  const result = await startLatest({ port: legacy.address().port, update: async () => { calls.push('update'); return { moved: false }; }, relaunch: async () => calls.push('relaunch'), launch: async options => { calls.push('launch'); return { reused: true, options }; }, tracker: null, env: {} });
+  assert.deepEqual(calls, ['launch']);
+  assert.equal(result.options.createServer, undefined);
+});
+
+test('startLatest stops an idle instance before updating, then relaunches when main moved', async t => {
+  const first = await launchHarnessConsole({ port: 0, open: () => {}, createServer: () => createApp({ adapter: { account: async () => ({ connected: true }) }, preferences: 'nonexistent-fixture-preferences' }) });
+  const port = first.server.address().port;
+  const closed = new Promise(resolve => first.server.once('close', resolve));
+  const calls = [];
+  const update = async () => { calls.push(first.server.listening ? 'update while running' : 'update'); return { head: 'abc1234', moved: true, note: null }; };
+  const result = await startLatest({ port, update, relaunch: async () => { calls.push('relaunch'); return { relaunched: true, code: 0 }; }, launch: async () => calls.push('launch'), tracker: null, env: {} });
+  await closed;
+  assert.deepEqual(calls, ['update', 'relaunch']);
+  assert.deepEqual(result, { relaunched: true, code: 0 });
+  // The relaunched launcher sees the flag and starts the app on the build it pulled.
+  const again = await startLatest({ port, update, relaunch: async () => assert.fail('must not relaunch twice'), launch: async options => options, tracker: null, env: { HARNESS_CONSOLE_RELAUNCHED: '1' } });
+  assert.equal(typeof again.createServer, 'function');
 });
 
 test('tracker PID comes only from an exact loopback or any-address LISTENING row', () => {
@@ -146,4 +178,59 @@ test('quoted and unquoted text glued together is one argument, as Windows parses
   assert(isTrackerCommandLine(`${node} C:\\Users\\me\\CoreWise\\harness-console\\"usage\\server.mjs"`, dir));
   assert(isTrackerCommandLine(`${node} ${tracker}`, dir));
   assert(isTrackerCommandLine(`${node} "${tracker}"`, dir));
+});
+
+test('any node server.mjs counts as a tracker to replace, so a tracker from an old checkout is stopped too', () => {
+  const node = '"C:\\Program Files\\nodejs\\node.exe"';
+  assert(isAnyTrackerCommandLine(`${node} C:\\Users\\me\\CoreWise\\UsageTracker\\server.mjs`));
+  assert(isAnyTrackerCommandLine(`${node} "C:\\Users\\me\\CoreWise\\Harness-Console\\usage\\SERVER.MJS"`));
+  assert(isAnyTrackerCommandLine('node c:/users/me/corewise/usagetracker/server.mjs'));
+  assert(!isAnyTrackerCommandLine(`${node} C:\\Users\\me\\CoreWise\\UsageTracker\\other.mjs`));
+  assert(!isAnyTrackerCommandLine(`${node} -e "1" C:\\x\\server.mjs`));
+  assert(!isAnyTrackerCommandLine(`${node} --test C:\\x\\server.mjs`));
+  assert(!isAnyTrackerCommandLine('C:\\Tools\\python.exe C:\\x\\server.mjs'));
+  assert(!isAnyTrackerCommandLine(node));
+  assert(!isAnyTrackerCommandLine(null));
+});
+
+test('selfUpdate fast-forwards a clean main and refuses a branch, uncommitted edits, or local commits', async t => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'harness-self-'));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const source = path.join(temp, 'source'), dir = path.join(temp, 'clone');
+  const commit = (cwd, name) => run('git', ['-C', cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qam', name]);
+  await mkdir(source); await run('git', ['init', '-q', '-b', 'main', source]);
+  await writeFile(path.join(source, 'app.txt'), 'v1'); await run('git', ['-C', source, 'add', 'app.txt']); await commit(source, 'v1');
+  await run('git', ['clone', '-q', source, dir]);
+  const head = async cwd => (await run('git', ['-C', cwd, 'rev-parse', '--short', 'HEAD'])).trim();
+
+  assert.deepEqual(await selfUpdate({ dir }), { head: await head(dir), moved: false, note: null });
+  await writeFile(path.join(source, 'app.txt'), 'v2'); await commit(source, 'v2');
+  const moved = await selfUpdate({ dir });
+  assert.equal(moved.moved, true); assert.equal(moved.head, await head(source)); assert.equal(moved.note, null);
+
+  await writeFile(path.join(source, 'app.txt'), 'v3'); await commit(source, 'v3');
+  await writeFile(path.join(dir, 'app.txt'), 'edited');
+  const dirty = await selfUpdate({ dir });
+  assert.equal(dirty.moved, false); assert.match(dirty.note, /Uncommitted changes/); assert.notEqual(dirty.head, await head(source));
+  await run('git', ['-C', dir, 'checkout', '-q', '--', 'app.txt']);
+
+  await run('git', ['-C', dir, 'checkout', '-qb', 'feature']);
+  assert.match((await selfUpdate({ dir })).note, /On branch feature/);
+  await run('git', ['-C', dir, 'checkout', '-q', 'main']);
+
+  // Only ahead: a fast-forward would be a no-op, and it must not read as up to date.
+  await run('git', ['-C', dir, 'fetch', '-q', 'origin']); await run('git', ['-C', dir, 'merge', '-q', '--ff-only', 'origin/main']);
+  await writeFile(path.join(dir, 'app.txt'), 'ahead'); await commit(dir, 'ahead');
+  const ahead = await selfUpdate({ dir });
+  assert.equal(ahead.moved, false); assert.match(ahead.note, /commits GitHub does not/);
+  await run('git', ['-C', dir, 'reset', '-q', '--hard', 'HEAD~1']);
+
+  await writeFile(path.join(dir, 'app.txt'), 'local'); await commit(dir, 'local');
+  const diverged = await selfUpdate({ dir });
+  assert.equal(diverged.moved, false); assert.match(diverged.note, /commits GitHub does not/);
+
+  await run('git', ['-C', dir, 'remote', 'set-url', 'origin', path.join(temp, 'missing')]);
+  await run('git', ['-C', dir, 'reset', '-q', '--hard', 'origin/main']);
+  assert.match((await selfUpdate({ dir })).note, /GitHub not reachable/);
+  assert.match((await selfUpdate({ dir: path.join(temp, 'nothing') })).note, /Not a Git checkout/);
 });

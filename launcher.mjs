@@ -2,6 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApp } from './server.mjs';
+import { GIT_CRED, run } from './core.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const TRACKER = { port: Number(process.env.USAGE_PORT) || 4545, dir: path.join(here, 'usage') };
@@ -24,15 +25,28 @@ export function parseListeningPid(text, port) {
 
 const normPath = p => path.win32.normalize(p.replace(/\//g, '\\')).toLowerCase();
 
-// True only for `node[.exe] <dir>\server.mjs`, quoted or not, any slash style or case.
-// The script must be the first argument: the tracker is started with no node options,
-// and any option (-e, --require, ...) or earlier script means node runs something else.
-export function isTrackerCommandLine(commandLine, dir) {
-  if (typeof commandLine !== 'string' || !commandLine.trim()) return false;
+// The script a plain `node[.exe] <script>` command line runs, or null. The script must be the
+// first argument: the tracker is started with no node options, and any option (-e, --require, ...)
+// or earlier script means node runs something else.
+function nodeScript(commandLine) {
+  if (typeof commandLine !== 'string' || !commandLine.trim()) return null;
   // Windows-style: quoted and unquoted runs glued together form one argument (`"a"b` is `ab`).
   const args = (commandLine.match(/(?:"[^"]*"|[^\s"])+/g) ?? []).map(arg => arg.replace(/"/g, ''));
-  if (!/^node(\.exe)?$/i.test(path.win32.basename(args[0]?.replace(/\//g, '\\') ?? ''))) return false;
-  return typeof args[1] === 'string' && normPath(args[1]) === normPath(path.join(dir, 'server.mjs'));
+  if (!/^node(\.exe)?$/i.test(path.win32.basename(args[0]?.replace(/\//g, '\\') ?? ''))) return null;
+  return typeof args[1] === 'string' ? args[1] : null;
+}
+
+// True only for `node[.exe] <dir>\server.mjs`, quoted or not, any slash style or case.
+export function isTrackerCommandLine(commandLine, dir) {
+  const script = nodeScript(commandLine);
+  return script !== null && normPath(script) === normPath(path.join(dir, 'server.mjs'));
+}
+
+// True for `node[.exe] <any folder>\server.mjs`. Paired with /api/usage answering on the tracker
+// port, that is a usage tracker, possibly started from another checkout such as the old UsageTracker folder.
+export function isAnyTrackerCommandLine(commandLine) {
+  const script = nodeScript(commandLine);
+  return script !== null && path.win32.basename(normPath(script)) === 'server.mjs';
 }
 
 // The process listening on a loopback TCP port, from `netstat -ano` (Windows). All
@@ -48,13 +62,14 @@ function commandLineOf(pid) {
 }
 
 // The usage tracker lives in usage/ with its own server. Start it when it is
-// not answering. With fresh, a running copy is stopped first so edits load;
-// otherwise it is left alone. Only a PID proven to be this tracker is killed;
-// anything else on the port is reused as before. Returns the child only when this launch started it.
+// not answering. With fresh, a running tracker is stopped first so this folder's copy
+// loads, even one started from another checkout; otherwise it is left alone. Only a
+// node server.mjs answering /api/usage is killed; anything else on the port is reused.
+// Returns the child only when this launch started it.
 export async function ensureUsageTracker({ port = TRACKER.port, dir = TRACKER.dir, fresh = false } = {}) {
   if (fresh && await trackerUp(port)) {
     const pid = await listeningPid(port);
-    if (pid && pid !== process.pid && isTrackerCommandLine(await commandLineOf(pid), dir)) {
+    if (pid && pid !== process.pid && isAnyTrackerCommandLine(await commandLineOf(pid))) {
       try { process.kill(pid); } catch {}
       for (let i = 0; i < 25 && await trackerUp(port); i++) await sleep(200);
     }
@@ -96,6 +111,27 @@ async function quitRunning(origin) {
   } catch { return false; }
 }
 
+// Brings this folder to GitHub's main before the app loads: fetch, then fast-forward only.
+// Never blocks the launch; when it cannot update, the note says why and the copy on disk runs.
+export async function selfUpdate({ dir = here, execute = run } = {}) {
+  const git = (...args) => execute('git', ['-C', dir, ...args], { timeout: 60000 });
+  const short = async () => (await git('rev-parse', '--short', 'HEAD').catch(() => '')).trim() || null;
+  const skip = async note => ({ head: await short(), moved: false, note });
+  const branch = (await git('rev-parse', '--abbrev-ref', 'HEAD').catch(() => '')).trim();
+  if (!branch) return skip('Not a Git checkout, so it did not update from GitHub.');
+  if (branch !== 'main') return skip(`On branch ${branch}, not main, so it did not update from GitHub.`);
+  if ((await git('status', '--porcelain', '--untracked-files=no').catch(() => '')).trim()) return skip('Uncommitted changes in this folder, so it did not update from GitHub.');
+  const before = (await git('rev-parse', 'HEAD')).trim();
+  try { await git(...GIT_CRED, 'fetch', '--quiet', 'origin', 'main'); }
+  catch { return skip('GitHub not reachable, so this is the copy on disk.'); }
+  // A main that is only ahead fast-forwards to itself, so check for local-only commits first.
+  const ahead = Number((await git('rev-list', '--count', 'origin/main..HEAD').catch(() => '0')).trim());
+  if (ahead) return skip('Local main has commits GitHub does not, so it did not update.');
+  try { await git('merge', '--ff-only', '--quiet', 'origin/main'); }
+  catch { return skip('Local main has commits GitHub does not, so it did not update.'); }
+  return { head: await short(), moved: before !== (await git('rev-parse', 'HEAD')).trim(), note: null };
+}
+
 const listen = (server, port) => new Promise((resolve, reject) => {
   server.once('error', reject);
   server.listen(port, '127.0.0.1', () => { server.removeListener('error', reject); resolve(); });
@@ -127,6 +163,34 @@ export async function launchHarnessConsole({ port = 43127, createServer = create
   return { reused: false, origin, server };
 }
 
+// Runs this launcher again in a child that shares the terminal, so the new files load while
+// Ctrl+C, output and the exit code still pass through this process.
+function relaunchSelf() {
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], { env: { ...process.env, HARNESS_CONSOLE_RELAUNCHED: '1' }, windowsHide: true, shell: false, stdio: 'inherit' });
+    child.on('error', error => { console.error(`Could not restart on the updated code: ${error.message}`); resolve({ relaunched: true, code: 1 }); });
+    child.on('exit', code => resolve({ relaunched: true, code: code ?? 1 }));
+  });
+}
+
+// The launch entry point. A running instance is stopped before the checkout changes, because it
+// reads public/ from disk and would mix new pages with its old handlers; a busy one keeps its
+// files and is only reopened. Then pull; when main moved, this process holds the old code, so
+// it hands off to a fresh launcher that finds nothing new and starts the app.
+export async function startLatest({ port = 43127, update = selfUpdate, relaunch = relaunchSelf, launch = launchHarnessConsole, tracker = ensureUsageTracker, env = process.env } = {}) {
+  const origin = `http://127.0.0.1:${port}`;
+  if (await isHarnessConsole(origin)) {
+    if (!await quitRunning(origin)) return launch({ port, tracker });
+    for (let i = 0; i < 50 && await isHarnessConsole(origin); i++) await sleep(100);
+  }
+  const build = await update();
+  if (build.moved && !env.HARNESS_CONSOLE_RELAUNCHED) return relaunch();
+  return launch({ port, tracker, createServer: () => createApp({ build }) });
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  launchHarnessConsole({ tracker: ensureUsageTracker }).then(result => console.log(`${result.reused ? 'Opened' : 'Started'} Harness Console: ${result.origin}`)).catch(error => { console.error(error.message); process.exitCode = 1; });
+  startLatest().then(result => {
+    if (result.relaunched) process.exitCode = result.code;
+    else console.log(`${result.reused ? 'Opened' : 'Started'} Harness Console: ${result.origin}`);
+  }).catch(error => { console.error(error.message); process.exitCode = 1; });
 }

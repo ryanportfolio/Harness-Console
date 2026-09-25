@@ -150,3 +150,8 @@ test('DSH routes preview without file bytes and install only skills from that pr
   assert.deepEqual(installs, [{ skills: 1, choices: [{ name: 'refine', policy: 'backup' }], dest: 'D:/dsh/skills' }]);
   assert.equal((await json('/api/dsh', { skills: [{ name: 'refine', policy: 'backup' }] })).status, 400);
 });
+
+test('every page script parses', async () => {
+  const { run } = await import('../core.mjs');
+  for (const file of ['public/app.js']) await run(process.execPath, ['--check', file]);
+});
