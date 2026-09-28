@@ -196,9 +196,10 @@ export async function compareRepo({ template, folder, rev = 'origin/main', execu
     else if (pristine(PARTS[1], name) || await generated(name)) skills.push({ name, codex: true, status: 'behind' });
     else skills.push({ ...await edited(name, await fileDiff(template, git, rev, name, PARTS[1])), codex: true });
   }
-  // A retired Codex-only skill: the template had only its .agents folder, never a Claude copy.
+  // A retired Codex-only skill: the template had only its .agents folder, never a Claude copy, and no
+  // longer has its SKILL.md (a leftover file can keep the folder). Same Codex setup rule as additions.
   for (const name of local[PARTS[1]].keys()) {
-    if (local[PARTS[0]].has(name) || local.odd.has(`${PARTS[0]}/${name}`) || template.current[PARTS[0]].has(name) || template.current[PARTS[1]].has(name) || template.history[PARTS[0]].has(name) || !template.history[PARTS[1]].has(name)) continue;
+    if (!modes || local[PARTS[0]].has(name) || local.odd.has(`${PARTS[0]}/${name}`) || template.current[PARTS[0]].has(name) || template.codexOnly.has(name) || template.history[PARTS[0]].has(name) || !template.history[PARTS[1]].has(name)) continue;
     skills.push({ name, codex: true, status: pristine(PARTS[1], name) || await generated(name) ? 'removed' : 'removed-edited' });
   }
   const harness = [...local[PARTS[0]].keys()].some(name => template.history[PARTS[0]].has(name));
