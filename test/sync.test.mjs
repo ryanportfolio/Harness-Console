@@ -342,3 +342,75 @@ test('a checkout newer than an out-of-date main is not called stale', async t =>
   const found = await staleWorktrees({ template: v3, folder: data.folder });
   assert.equal(found.some(entry => entry.path.toLowerCase() === path.resolve(ahead).toLowerCase()), false);
 });
+
+// Codex-only skills: zeta has a SKILL.md under .agents/skills and no Claude copy; omega is a leftover
+// folder without SKILL.md, which is not a skill.
+async function addCodexOnly(data, files, message) {
+  const template = path.join(data.temp, 'template');
+  for (const [file, text] of Object.entries(files)) {
+    if (text === null) await rm(path.join(template, file), { recursive: true, force: true }); else await put(template, file, text);
+  }
+  await commit(template, message);
+}
+
+test('a Codex-only skill is offered, added as its .agents folder alone, then updated', async t => {
+  const data = await fixture(t);
+  await addCodexOnly(data, {
+    '.agents/skills/zeta/SKILL.md': 'zeta v1\n', '.agents/skills/omega/patterns.md': 'leftover\n',
+    '.agents/skill-modes.json': json({ version: 1, skills: { alpha: 'native', delta: 'native', zeta: 'native' } }),
+  }, 'codex only');
+  let template = await data.opened();
+  assert.deepEqual([...template.codexOnly], ['zeta']);
+  const [repo] = (await scanSkills({ root: data.root, template })).repos;
+  assert.deepEqual(repo.skills.find(skill => skill.name === 'zeta'), { name: 'zeta', codex: true, status: 'new' });
+  assert.equal(repo.skills.some(skill => skill.name === 'omega'), false);
+
+  const [outcome] = await applySkills({ root: data.root, template, selection: [{ id: 'owner/project', apply: ['zeta'] }] });
+  assert.equal(outcome.result, 'pushed');
+  assert.equal(await shows(data)('.agents/skills/zeta/SKILL.md'), 'zeta v1\n');
+  await assert.rejects(shows(data)('.claude/skills/zeta/SKILL.md'));
+  assert.equal(JSON.parse(await shows(data)('.agents/skill-modes.json')).skills.zeta, 'native');
+  assert.match(await run('git', ['--git-dir', data.remote, 'log', '-1', '--format=%B', 'main']), /Added: zeta\n/);
+
+  await addCodexOnly(data, { '.agents/skills/zeta/SKILL.md': 'zeta v2\n' }, 'zeta v2');
+  template = await data.opened();
+  assert.equal(statuses((await scanSkills({ root: data.root, template })).repos[0]).zeta, 'behind');
+  await applySkills({ root: data.root, template, selection: [{ id: 'owner/project', apply: ['zeta'] }] });
+  assert.equal(await shows(data)('.agents/skills/zeta/SKILL.md'), 'zeta v2\n');
+
+  // Retired with a leftover file still in the template folder: no SKILL.md, so no longer a skill.
+  await addCodexOnly(data, { '.agents/skills/zeta/SKILL.md': null, '.agents/skills/zeta/leftover.md': 'leftover\n' }, 'retire zeta');
+  template = await data.opened();
+  const retired = (await scanSkills({ root: data.root, template })).repos[0].skills.find(skill => skill.name === 'zeta');
+  assert.deepEqual(retired, { name: 'zeta', codex: true, status: 'removed' });
+  await applySkills({ root: data.root, template, selection: [{ id: 'owner/project', remove: ['zeta'] }] });
+  await assert.rejects(shows(data)('.agents/skills/zeta/SKILL.md'));
+  assert.equal(JSON.parse(await shows(data)('.agents/skill-modes.json')).skills.zeta, undefined);
+});
+
+test('a Codex-only skill is not offered without skill-modes.json, is off when disabled, and an edited copy is customized', async t => {
+  const files = { '.agents/skills/zeta/SKILL.md': 'zeta v1\n', '.agents/skill-modes.json': json({ version: 1, skills: { alpha: 'native', delta: 'native', zeta: 'native' } }) };
+  const none = await fixture(t, { noModes: true });
+  await addCodexOnly(none, files, 'codex only');
+  assert.equal((await scanSkills({ root: none.root, template: await none.opened() })).repos[0].skills.some(skill => skill.name === 'zeta'), false);
+  // Nor offered for removal once retired, even with the folder present.
+  const noneRetired = await fixture(t, { noModes: true, extra: { '.agents/skills/zeta/SKILL.md': 'zeta v1\n' } });
+  await addCodexOnly(noneRetired, files, 'codex only');
+  await addCodexOnly(noneRetired, { '.agents/skills/zeta': null }, 'retire zeta');
+  assert.equal((await scanSkills({ root: noneRetired.root, template: await noneRetired.opened() })).repos[0].skills.some(skill => skill.name === 'zeta'), false);
+
+  const off = await fixture(t, { targetModes: { alpha: 'native', zeta: 'disabled' } });
+  await addCodexOnly(off, files, 'codex only');
+  assert.equal(statuses((await scanSkills({ root: off.root, template: await off.opened() })).repos[0]).zeta, 'off');
+
+  const edited = await fixture(t, { extra: { '.agents/skills/zeta/SKILL.md': 'zeta by hand\n' } });
+  await addCodexOnly(edited, files, 'codex only');
+  const template = await edited.opened();
+  const zeta = (await scanSkills({ root: edited.root, template })).repos[0].skills.find(skill => skill.name === 'zeta');
+  assert.equal(zeta.status, 'customized');
+  assert.equal(zeta.codex, true);
+  assert.deepEqual(zeta.files, { changed: ['SKILL.md'], added: [], missing: [] });
+  const [outcome] = await applySkills({ root: edited.root, template, selection: [{ id: 'owner/project', apply: ['zeta'] }] });
+  assert.equal(outcome.result, 'current');
+  assert.equal(await shows(edited)('.agents/skills/zeta/SKILL.md'), 'zeta by hand\n');
+});

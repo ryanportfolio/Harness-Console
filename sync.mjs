@@ -92,7 +92,12 @@ export async function openTemplate({ cache = TEMPLATE_CACHE, source = `https://g
   } });
   const modes = (await showJson(git, head, '.agents/skill-modes.json'))?.skills ?? {};
   const registries = Object.fromEntries(await Promise.all(REGISTRIES.map(async file => [file, await showJson(git, head, file)])));
-  return { cache, head, git, current: await skillTrees(git, head), history, age, modes, registries, blobs: new Map() };
+  const current = await skillTrees(git, head);
+  // Codex-only skills: a SKILL.md under .agents/skills with no Claude copy. A leftover folder without
+  // SKILL.md is not a skill.
+  const codexOnly = new Set((await git(['ls-tree', '-r', '-z', '--name-only', head, '--', `${PARTS[1]}/`])).split('\0')
+    .map(file => /^\.agents\/skills\/([A-Za-z0-9_-]+)\/SKILL\.md$/.exec(file)?.[1]).filter(name => name && !current[PARTS[0]].has(name)));
+  return { cache, head, git, current, codexOnly, history, age, modes, registries, blobs: new Map() };
 }
 
 // Only real GitHub remotes: https (userinfo allowed), scp-style git@, or ssh://git@. Anchoring the
@@ -178,6 +183,24 @@ export async function compareRepo({ template, folder, rev = 'origin/main', execu
   for (const name of local[PARTS[0]].keys()) {
     if (template.current[PARTS[0]].has(name) || !template.history[PARTS[0]].has(name)) continue;
     skills.push({ name, status: pristine(PARTS[0], name) && await codexSafe(name) ? 'removed' : 'removed-edited' });
+  }
+  // A Codex-only skill is its .agents folder alone. A repository without skill-modes.json has no Codex
+  // setup to receive one, and a repository with its own Claude copy of the name owns that skill.
+  for (const name of template.codexOnly) {
+    if (!modes || local[PARTS[0]].has(name) || local.odd.has(`${PARTS[0]}/${name}`)) continue;
+    if (overrides[name] === 'off' || modes[name] === 'disabled') skills.push({ name, codex: true, status: 'off' });
+    else if (local.odd.has(`${PARTS[1]}/${name}`)) skills.push({ ...await edited(name, { changed: [], added: [], missing: [] }), codex: true });
+    else if (!local[PARTS[1]].has(name)) skills.push({ name, codex: true, status: 'new' });
+    else if (local[PARTS[1]].get(name) === template.current[PARTS[1]].get(name)) skills.push({ name, codex: true, status: 'same' });
+    // A generated adapter with no Claude copy behind it is a leftover the template copy can replace.
+    else if (pristine(PARTS[1], name) || await generated(name)) skills.push({ name, codex: true, status: 'behind' });
+    else skills.push({ ...await edited(name, await fileDiff(template, git, rev, name, PARTS[1])), codex: true });
+  }
+  // A retired Codex-only skill: the template had only its .agents folder, never a Claude copy, and no
+  // longer has its SKILL.md (a leftover file can keep the folder). Same Codex setup rule as additions.
+  for (const name of local[PARTS[1]].keys()) {
+    if (!modes || local[PARTS[0]].has(name) || local.odd.has(`${PARTS[0]}/${name}`) || template.current[PARTS[0]].has(name) || template.codexOnly.has(name) || template.history[PARTS[0]].has(name) || !template.history[PARTS[1]].has(name)) continue;
+    skills.push({ name, codex: true, status: pristine(PARTS[1], name) || await generated(name) ? 'removed' : 'removed-edited' });
   }
   const harness = [...local[PARTS[0]].keys()].some(name => template.history[PARTS[0]].has(name));
   return { harness, nativeCopies, skills: skills.sort((a, b) => a.name.localeCompare(b.name)) };
@@ -314,10 +337,10 @@ async function applyRepo({ template, clone, apply, remove, replace, execute, onO
     const hasCapabilities = await exists(scripts.capabilities) && await exists(path.join(worktree, '.agents', 'skill-capabilities.json'));
     const before = { codex: hasCodex && await node(scripts.codex, ['--check'], worktree, execute), capabilities: hasCapabilities && await node(scripts.capabilities, [], worktree, execute) };
 
-    // Only skills whose Codex copy is native here receive the template's .agents folder.
+    // Only skills whose Codex copy is native here, and Codex-only skills, receive the template's .agents folder.
     // A replaced skill loses a hand-written Codex copy the template does not supply, so the repository's
     // generator can write its adapter; a generated adapter stays for the generator to rebuild.
-    const incoming = name => PARTS.filter(part => template.current[part].has(name) && (part === PARTS[0] || nativeCopies.has(name)));
+    const incoming = name => PARTS.filter(part => template.current[part].has(name) && (part === PARTS[0] || nativeCopies.has(name) || template.codexOnly.has(name)));
     const folders = [...take, ...swap].flatMap(name => incoming(name).map(part => `${part}/${name}`));
     const handDrops = swap.filter(name => found.get(name).handCodex && !incoming(name).includes(PARTS[1])).map(name => `${PARTS[1]}/${name}`);
     await writeFolders(template, worktree, git, folders, [...drop.flatMap(name => PARTS.map(part => `${part}/${name}`)), ...handDrops], execute);

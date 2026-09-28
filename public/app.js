@@ -234,9 +234,11 @@ $('skillsEnableAll').onclick = () => setOptionalSkills(true); $('skillsClearOpti
 // Skill sync: compare every Harness clone with the template, then push chosen skills to each main.
 const sync = { scanned: false, scanning: false, data: null, armed: false };
 // The third field marks groups with checkboxes; every box starts unchecked so a push takes only what was picked.
+// Codex-only skills (an .agents copy and no Claude copy) get their own row for updates and additions.
+const hasStatus = (status, codex) => skill => skill.status === status && (codex === undefined || Boolean(skill.codex) === codex);
 const SYNC_GROUPS = [
-  ['behind', 'Update', true], ['new', 'Add', true], ['removed', 'Remove', true],
-  ['customized', 'Edited here', true], ['removed-edited', 'Removed upstream, edited here'], ['off', 'Turned off'],
+  [hasStatus('behind', false), 'Update', true], [hasStatus('new', false), 'Add', true], [skill => hasStatus('behind', true)(skill) || hasStatus('new', true)(skill), 'Codex only', true],
+  [hasStatus('removed'), 'Remove', true], [hasStatus('customized'), 'Edited here', true], [hasStatus('removed-edited'), 'Removed upstream, edited here'], [hasStatus('off'), 'Turned off'],
 ];
 const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 async function scanSync() {
@@ -257,7 +259,11 @@ function syncCheckbox(repo, skill, checked) {
   const label = document.createElement('label'); const input = document.createElement('input'); input.type = 'checkbox'; input.checked = checked;
   input.dataset.repo = repo.id; input.dataset.skill = skill.name; input.dataset.action = { removed: 'remove', customized: 'replace' }[skill.status] ?? 'apply';
   input.addEventListener('change', () => { sync.armed = false; syncRepoToggle(repo.id); renderSyncFoot(); });
-  if (skill.status !== 'customized') { label.append(input, skill.name); return label; }
+  if (skill.status !== 'customized') {
+    label.append(input, skill.name);
+    if (skill.codex && ['behind', 'new'].includes(skill.status)) { const tag = document.createElement('span'); tag.className = 'plain'; tag.textContent = skill.status === 'new' ? 'new' : 'update'; label.append(tag); }
+    return label;
+  }
   // An edited copy names what differs, so replacing it is a choice made with the edits in view.
   const { changed, added, missing } = skill.files;
   const parts = [changed.length && `${changed.join(', ')} changed`, added.length && `${added.join(', ')} added here`, missing.length && `${missing.join(', ')} missing here`].filter(Boolean);
@@ -270,17 +276,17 @@ function syncRepoBlock(repo) {
   const title = document.createElement('h2'); title.textContent = repo.name;
   const id = document.createElement('a'); id.className = 'pill'; id.textContent = repo.id; id.href = 'https://github.com/' + repo.id.split('/').map(encodeURIComponent).join('/'); id.target = '_blank'; id.rel = 'noopener noreferrer'; id.setAttribute('aria-label', `Open ${repo.id} on GitHub (new tab)`);
   head.append(title, id);
-  const tally = status => repo.skills.filter(skill => skill.status === status).length;
+  const tally = (status, codex) => repo.skills.filter(hasStatus(status, codex)).length;
   if (tally('behind') + tally('new')) {
     const toggle = document.createElement('label'); toggle.className = 'sync-toggle'; const box = document.createElement('input'); box.type = 'checkbox'; box.dataset.toggle = repo.id;
     box.addEventListener('change', () => { for (const input of repoBoxes(repo.id)) input.checked = box.checked; sync.armed = false; syncRepoToggle(repo.id); renderSyncFoot(); });
     toggle.append(box, 'All updates and additions'); head.append(toggle);
   }
   const counts = document.createElement('p'); counts.className = 'sync-counts';
-  counts.textContent = [`${tally('same')} current`, tally('behind') && `${tally('behind')} behind`, tally('new') && `${tally('new')} new`, tally('removed') + tally('removed-edited') && `${tally('removed') + tally('removed-edited')} removed upstream`, tally('customized') && `${tally('customized')} edited here`, tally('off') && `${tally('off')} turned off`, repo.worktrees?.length && `${repo.worktrees.length} ${repo.worktrees.length === 1 ? 'checkout' : 'checkouts'} on older skills`].filter(Boolean).join(', ');
+  counts.textContent = [`${tally('same')} current`, tally('behind', false) && `${tally('behind', false)} behind`, tally('new', false) && `${tally('new', false)} new`, tally('behind', true) && `${tally('behind', true)} Codex-only behind`, tally('new', true) && `${tally('new', true)} Codex-only new`, tally('removed') + tally('removed-edited') && `${tally('removed') + tally('removed-edited')} removed upstream`, tally('customized') && `${tally('customized')} edited here`, tally('off') && `${tally('off')} turned off`, repo.worktrees?.length && `${repo.worktrees.length} ${repo.worktrees.length === 1 ? 'checkout' : 'checkouts'} on older skills`].filter(Boolean).join(', ');
   section.append(head, counts);
-  for (const [status, label, checkable] of SYNC_GROUPS) {
-    const skills = repo.skills.filter(skill => skill.status === status); if (!skills.length) continue;
+  for (const [match, label, checkable] of SYNC_GROUPS) {
+    const skills = repo.skills.filter(match); if (!skills.length) continue;
     const group = document.createElement('div'); group.className = 'sync-group';
     const name = document.createElement('span'); name.textContent = label;
     const list = document.createElement('div'); list.className = 'sync-skills';
