@@ -46,6 +46,7 @@
   <p id="syncNote" class="sync-note">Compares each Harness repository cloned in your CoreWise folder with the template on GitHub. Skills edited in that repository stay as they are unless you choose to replace them with the template copy. Changes are pushed straight to main; your local folders are not touched.</p>
   <div id="syncTools" class="sync-tools" hidden><button id="syncSelectAll" class="quiet" type="button">Select all updates and additions</button><button id="syncClearAll" class="quiet" type="button">Unselect all</button></div>
   <div id="syncRepos"></div>
+  <dialog id="syncCompare" class="sync-compare" aria-labelledby="syncCompareTitle"><div class="activity-heading"><h2 id="syncCompareTitle">Compare</h2><button id="syncCompareClose" class="quiet" type="button">Close</button></div><p id="syncCompareNote" class="sync-counts"></p><pre id="syncDiff" tabindex="0"></pre></dialog>
   <div id="syncFoot" class="sync-foot" hidden><span id="syncSummary"></span><button id="syncApply" class="primary" type="button">Push to main <span>↑</span></button></div>
   <section id="syncActivity" class="activity" hidden aria-live="polite"><div class="activity-heading"><h2 id="syncActivityTitle">Syncing skills</h2><span id="syncJobState" class="pill"></span></div><pre id="syncLog" tabindex="0"></pre></section>
 </div>

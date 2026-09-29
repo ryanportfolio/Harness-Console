@@ -121,6 +121,25 @@ test('sync route pins a replacement to the scanned trees and refuses skills that
   assert.deepEqual(synced, [[{ id: 'owner/project', apply: [], remove: [], replace: [{ name: 'beta', trees: 't1:-' }] }]]);
 });
 
+test('sync compare route reads only a scanned repository and skill at the scanned commits', async t => {
+  const compared = [];
+  const server = await createApp({
+    adapter: { account: async () => ({ connected: true, login: 'fixture' }) },
+    scan: async () => ({ template: { head: 'abc' }, repos: [{ id: 'owner/project', name: 'project', folder: 'C:/CoreWise/project', head: 'def', skills: [{ name: 'alpha', status: 'behind' }, { name: 'off', status: 'off' }] }] }),
+    compareSync: async args => { compared.push(args); return 'diff text'; },
+    preferences: 'nonexistent-fixture-preferences',
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const get = async route => { const response = await fetch(`${origin}${route}`); return { status: response.status, body: await response.json() }; };
+  assert.equal((await get('/api/sync/compare?id=owner/project&name=alpha')).status, 404);
+  await get('/api/sync');
+  for (const query of ['id=owner/other&name=alpha', 'id=owner/project&name=beta', 'id=owner/project&name=off']) assert.equal((await get(`/api/sync/compare?${query}`)).status, 404, query);
+  assert.deepEqual((await get('/api/sync/compare?id=owner/project&name=alpha')).body, { name: 'alpha', diff: 'diff text' });
+  assert.deepEqual(compared, [{ folder: 'C:/CoreWise/project', rev: 'def', name: 'alpha', templateHead: 'abc' }]);
+});
+
 test('DSH routes preview without file bytes and install only skills from that preview', async t => {
   const installs = [];
   const preview = { source: { commit: 'abc' }, dest: 'D:/dsh/skills', destProblems: [], skills: [{ name: 'refine', status: 'conflict', rendered: [{ path: 'SKILL.md', data: Buffer.from('x') }] }] };

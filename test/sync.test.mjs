@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { run } from '../core.mjs';
-import { applySkills, githubId, normalizeSelection, openTemplate, scanSkills, staleWorktrees } from '../sync.mjs';
+import { applySkills, compareSkill, githubId, normalizeSelection, openTemplate, scanSkills, staleWorktrees } from '../sync.mjs';
 
 const put = async (dir, file, text) => { await mkdir(path.dirname(path.join(dir, file)), { recursive: true }); await writeFile(path.join(dir, file), text); };
 const commit = async (dir, message) => { await run('git', ['-C', dir, 'add', '-A']); await run('git', ['-C', dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', message]); };
@@ -64,6 +64,24 @@ test('scan classifies each skill against the template history', async t => {
   assert.equal(repo.id, 'owner/project');
   assert.deepEqual(statuses(repo), { alpha: 'behind', beta: 'customized', delta: 'new', epsilon: 'off', gamma: 'removed' });
   assert.deepEqual(repo.skills.find(skill => skill.name === 'beta').files, { changed: ['SKILL.md'], added: [], missing: [] });
+});
+
+test('compare diffs the scanned main copy against the template copy a sync would write', async t => {
+  const data = await fixture(t);
+  const result = await scanSkills({ root: data.root, template: await data.opened() });
+  const [repo] = result.repos;
+  const diff = name => compareSkill({ folder: repo.folder, rev: repo.head, name, templateHead: result.template.head });
+  // alpha is native here, so both copies show; the uncommitted working-folder edit does not.
+  const alpha = await diff('alpha');
+  for (const line of ['--- a/repo/.claude/skills/alpha/SKILL.md', '+++ b/harness-firmware/.claude/skills/alpha/SKILL.md', '-alpha v1', '+alpha v2', '--- a/repo/.agents/skills/alpha/SKILL.md', '-alpha native v1', '+alpha native v2']) assert.ok(alpha.includes(line), line);
+  assert.ok(!alpha.includes('uncommitted work'));
+  const beta = await diff('beta');
+  assert.ok(beta.includes('-beta edited here') && beta.includes('+beta v1')); assert.ok(!beta.includes('.agents'));
+  const delta = await diff('delta');
+  assert.ok(delta.includes('+++ b/harness-firmware/.claude/skills/delta/scripts/tool.mjs') && delta.includes('+delta v1') && !/^-[^-]/m.test(delta));
+  assert.ok((await diff('gamma')).includes('-gamma v1'));
+  await assert.rejects(compareSkill({ folder: repo.folder, rev: repo.head, name: 'alpha', templateHead: 'other' }), /Check repositories again/);
+  await assert.rejects(diff('mine'), /not a Harness skill/);
 });
 
 test('apply pushes selected skills to main and leaves the working folder alone', async t => {
