@@ -66,6 +66,8 @@ async function skillTrees(git, rev) {
 const showJson = async (git, rev, file) => { try { return JSON.parse(await git(['show', `${rev}:${file}`])); } catch { return null; } };
 
 const commitTrees = new Map();
+// The template the last scan compared against; a compare reads the same head the page was shown.
+let latestTemplate = null;
 // Fetches the template into a private bare cache (trees only; blobs arrive when a skill is applied)
 // and records every tree each skill folder has ever had on main.
 export async function openTemplate({ cache = TEMPLATE_CACHE, source = `https://github.com/${TEMPLATE}.git`, execute = run, onOutput = () => {} } = {}) {
@@ -97,7 +99,8 @@ export async function openTemplate({ cache = TEMPLATE_CACHE, source = `https://g
   // SKILL.md is not a skill.
   const codexOnly = new Set((await git(['ls-tree', '-r', '-z', '--name-only', head, '--', `${PARTS[1]}/`])).split('\0')
     .map(file => /^\.agents\/skills\/([A-Za-z0-9_-]+)\/SKILL\.md$/.exec(file)?.[1]).filter(name => name && !current[PARTS[0]].has(name)));
-  return { cache, head, git, current, codexOnly, history, age, modes, registries, blobs: new Map() };
+  latestTemplate = { cache, head, git, current, codexOnly, history, age, modes, registries, blobs: new Map() };
+  return latestTemplate;
 }
 
 // Only real GitHub remotes: https (userinfo allowed), scp-style git@, or ssh://git@. Anchoring the
@@ -262,12 +265,58 @@ async function templateFiles(template, folders, execute) {
   const entries = parseTree(await template.git(['ls-tree', '-z', '-r', template.head, '--', ...folders.map(folder => `${folder}/`)]));
   const odd = entries.find(entry => entry.type !== 'blob' || entry.mode === '120000');
   if (odd) throw new Error(`${odd.path} is not a regular file; sync it by hand.`);
+  await templateBlobs(template, entries, execute);
+  return entries;
+}
+// The cache is blobless: fetch missing files in batches instead of one lazy fetch per file.
+// A failed batch fetch is not fatal; cat-file still fetches lazily what is absent.
+async function templateBlobs(template, entries, execute) {
   const missing = [...new Set(entries.filter(entry => !template.blobs.has(entry.sha)).map(entry => entry.sha))];
-  // The cache is blobless: fetch missing files in batches instead of one lazy fetch per file.
-  // A failed batch fetch is not fatal; cat-file still fetches lazily what is absent.
   for (let index = 0; index < missing.length; index += 200) await execute('git', ['--git-dir', template.cache, ...GIT_CRED, 'fetch', '--quiet', '--no-write-fetch-head', 'origin', ...missing.slice(index, index + 200)]).catch(() => {});
   if (missing.length) for (const [sha, data] of await readBlobs(template.cache, missing)) template.blobs.set(sha, data);
-  return entries;
+}
+
+// Unified diff from a repository's copy of one skill at rev to the template copy a sync would write.
+// Each side holds the folders a sync touches: the Claude copy, plus the .agents copy where it is
+// native, Codex-only, or hand-written here. A generated adapter is left out; the generator rebuilds it.
+// A removal deletes every folder of the skill, so its template side is empty.
+export async function compareSkill({ folder, rev, name, templateHead, template = latestTemplate, execute = run }) {
+  if (!SKILL_NAME.test(name)) throw new Error('Invalid skill name.');
+  if (!template || template.head !== templateHead) throw new Error('Check repositories again.');
+  const git = args => execute('git', ['-C', folder, ...args]);
+  const { skills, nativeCopies } = await compareRepo({ template, folder, rev, execute });
+  const skill = skills.find(item => item.name === name);
+  if (!skill) throw new Error(`${name} is not a Harness skill in this repository.`);
+  const codex = skill.codex || template.codexOnly.has(name), removal = ['removed', 'removed-edited'].includes(skill.status);
+  const ours = PARTS.filter(part => part === PARTS[0] ? !codex : codex || removal || nativeCopies.has(name) || skill.handCodex);
+  const theirs = removal ? [] : PARTS.filter(part => template.current[part].has(name) && (part === PARTS[0] ? !codex : codex || nativeCopies.has(name)));
+  // No trailing slash: a file or symlink where the skill folder belongs is listed too, since a
+  // replacement deletes it. Symlinks are written as their target text; submodules have no bytes.
+  const files = async (read, tree, parts) => parts.length ? parseTree(await read(['ls-tree', '-z', '-r', tree, '--', ...parts.map(part => `${part}/${name}`)])).filter(entry => entry.type === 'blob') : [];
+  const mine = await files(git, rev, ours), incoming = await files(template.git, template.head, theirs);
+  // Scratch files carry no Git mode, so a sync's executable-bit change is listed ahead of the diff.
+  const modes = new Map(mine.map(entry => [entry.path, entry.mode]));
+  const modeLines = incoming.filter(entry => modes.has(entry.path) && modes.get(entry.path) !== entry.mode).map(entry => `mode ${modes.get(entry.path)} -> ${entry.mode}: ${entry.path}\n`).join('');
+  await templateBlobs(template, incoming, execute);
+  const local = mine.length ? await readBlobs((await git(['rev-parse', '--absolute-git-dir'])).trim(), [...new Set(mine.map(entry => entry.sha))]) : new Map();
+  const scratch = await mkdtemp(path.join(tmpdir(), 'corewise-sync-compare-'));
+  try {
+    // Short side names, so the diff headers read repo/... and harness-firmware/....
+    const write = async (side, entries, blobs) => {
+      await mkdir(path.join(scratch, side), { recursive: true });
+      for (const entry of entries) {
+        const target = path.join(scratch, side, ...entry.path.split('/'));
+        await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, blobs.get(entry.sha));
+      }
+    };
+    await write('repo', mine, local); await write('harness-firmware', incoming, template.blobs);
+    return await new Promise((resolve, reject) => {
+      const child = spawn('git', ['diff', '--no-index', '--no-color', '--', 'repo', 'harness-firmware'], { cwd: scratch, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '', err = ''; child.stdout.on('data', data => { out += data; }); child.stderr.on('data', data => { err += data; });
+      child.on('error', reject);
+      child.on('close', code => code <= 1 ? resolve((`${modeLines}${out}` || 'No differences.\n').slice(0, 200_000)) : reject(new Error(err.trim() || `git diff exited with code ${code}`)));
+    });
+  } finally { await rm(scratch, { recursive: true, force: true }); }
 }
 
 // Replaces whole skill folders: dropped folders go, template folders arrive byte for byte.

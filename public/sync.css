@@ -26,3 +26,11 @@
 .dsh-detail{display:block;font-size:14px;color:var(--bronze);line-height:1.6}.dsh-detail b{font-weight:500;color:var(--ink)}
 .dsh-conflict{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 18px;width:100%}
 .dsh-conflict .quiet{font-size:14px}
+/* Skill names open a diff of the repository copy against the template copy. */
+.sync-name{text-decoration:underline dotted;text-underline-offset:4px;text-decoration-thickness:1px;font-weight:inherit;color:inherit}.sync-name:hover{text-decoration-style:solid}
+.sync-skills .sync-name.plain{color:var(--bronze)}
+.sync-compare{width:min(1100px,92vw);max-height:86vh;border:1px solid var(--ink);border-radius:0;background:var(--sand);color:var(--ink);padding:24px 30px}
+.sync-compare::backdrop{background:rgba(30,33,30,.35)}
+.sync-compare pre{margin:14px 0 0;max-height:calc(86vh - 150px);overflow:auto;font:13px/1.5 Consolas,"Cascadia Mono",ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;border-top:1px solid var(--wheat);padding-top:10px}
+.sync-compare pre span{display:block;padding:0 6px}
+.diff-add{background:rgba(96,128,56,.2)}.diff-del{background:rgba(160,64,48,.16)}.diff-hunk{color:var(--bronze)}.diff-meta{font-weight:700}

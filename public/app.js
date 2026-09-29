@@ -255,19 +255,39 @@ function syncRepoToggle(id) {
   const boxes = repoBoxes(id), on = boxes.filter(box => box.checked).length;
   toggle.checked = on > 0 && on === boxes.length; toggle.indeterminate = on > 0 && on < boxes.length;
 }
+// A skill name opens the diff; inside a label a button click does not toggle the checkbox.
+function compareButton(repo, skill, extra = '') {
+  const button = document.createElement('button'); button.type = 'button'; button.className = `sync-name ${extra}`.trim(); button.textContent = skill.name;
+  button.title = `Show how ${repo.name}'s copy differs from Harness-Firmware`; button.onclick = () => void compareSync(repo, skill); return button;
+}
+let compareRequest = 0;
+async function compareSync(repo, skill) {
+  const request = ++compareRequest;
+  $('syncCompareTitle').textContent = `${skill.name} in ${repo.name}`;
+  $('syncCompareNote').textContent = `Lines marked - are in ${repo.id} main (${repo.head.slice(0, 7)}); lines marked + are the Harness-Firmware copy (${sync.data.template.head.slice(0, 7)}) a sync would write.`;
+  $('syncDiff').textContent = 'Loading…'; if (!$('syncCompare').open) $('syncCompare').showModal();
+  let diff;
+  const query = new URLSearchParams({ id: repo.id, name: skill.name, rev: repo.head, template: sync.data.template.head });
+  try { diff = (await api(`sync/compare?${query}`)).diff; } catch (error) { diff = error.message; }
+  if (request !== compareRequest) return;
+  const kind = line => /^(mode |diff |index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/.test(line) ? 'diff-meta' : line.startsWith('@@') ? 'diff-hunk' : line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : '';
+  const lines = diff.replace(/\n$/, '').split('\n').map(line => { const span = document.createElement('span'); span.className = kind(line); span.textContent = line || ' '; return span; });
+  $('syncDiff').replaceChildren(...lines); $('syncDiff').scrollTop = 0;
+}
+$('syncCompareClose').onclick = () => $('syncCompare').close();
 function syncCheckbox(repo, skill, checked) {
   const label = document.createElement('label'); const input = document.createElement('input'); input.type = 'checkbox'; input.checked = checked;
   input.dataset.repo = repo.id; input.dataset.skill = skill.name; input.dataset.action = { removed: 'remove', customized: 'replace' }[skill.status] ?? 'apply';
   input.addEventListener('change', () => { sync.armed = false; syncRepoToggle(repo.id); renderSyncFoot(); });
   if (skill.status !== 'customized') {
-    label.append(input, skill.name);
+    label.append(input, compareButton(repo, skill));
     if (skill.codex && ['behind', 'new'].includes(skill.status)) { const tag = document.createElement('span'); tag.className = 'plain'; tag.textContent = skill.status === 'new' ? 'new' : 'update'; label.append(tag); }
     return label;
   }
   // An edited copy names what differs, so replacing it is a choice made with the edits in view.
   const { changed, added, missing } = skill.files;
   const parts = [changed.length && `${changed.join(', ')} changed`, added.length && `${added.join(', ')} added here`, missing.length && `${missing.join(', ')} missing here`].filter(Boolean);
-  const text = document.createElement('span'); const b = document.createElement('b'); b.textContent = skill.name; text.append(b, `: ${parts.join('; ') || 'Codex copy differs'}`);
+  const text = document.createElement('span'); const b = document.createElement('b'); b.append(compareButton(repo, skill)); text.append(b, `: ${parts.join('; ') || 'Codex copy differs'}`);
   label.className = 'sync-edited'; label.append(input, text); return label;
 }
 function syncRepoBlock(repo) {
@@ -291,7 +311,7 @@ function syncRepoBlock(repo) {
     const name = document.createElement('span'); name.textContent = label;
     const list = document.createElement('div'); list.className = 'sync-skills';
     if (checkable) list.append(...skills.map(skill => syncCheckbox(repo, skill, false)));
-    else list.append(...skills.map(skill => { const span = document.createElement('span'); span.className = 'plain'; span.textContent = skill.name; return span; }));
+    else list.append(...skills.map(skill => { if (skill.status !== 'off') return compareButton(repo, skill, 'plain'); const span = document.createElement('span'); span.className = 'plain'; span.textContent = skill.name; return span; }));
     group.append(name, list); section.append(group);
   }
   // Read-only: sessions started in these checkouts load older template copies than main has.
