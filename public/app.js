@@ -267,9 +267,10 @@ async function compareSync(repo, skill) {
   $('syncCompareNote').textContent = `Lines marked - are in ${repo.id} main (${repo.head.slice(0, 7)}); lines marked + are the Harness-Firmware copy (${sync.data.template.head.slice(0, 7)}) a sync would write.`;
   $('syncDiff').textContent = 'Loading…'; if (!$('syncCompare').open) $('syncCompare').showModal();
   let diff;
-  try { diff = (await api(`sync/compare?id=${encodeURIComponent(repo.id)}&name=${encodeURIComponent(skill.name)}`)).diff; } catch (error) { diff = error.message; }
+  const query = new URLSearchParams({ id: repo.id, name: skill.name, rev: repo.head, template: sync.data.template.head });
+  try { diff = (await api(`sync/compare?${query}`)).diff; } catch (error) { diff = error.message; }
   if (request !== compareRequest) return;
-  const kind = line => /^(diff |index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/.test(line) ? 'diff-meta' : line.startsWith('@@') ? 'diff-hunk' : line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : '';
+  const kind = line => /^(mode |diff |index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/.test(line) ? 'diff-meta' : line.startsWith('@@') ? 'diff-hunk' : line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : '';
   const lines = diff.replace(/\n$/, '').split('\n').map(line => { const span = document.createElement('span'); span.className = kind(line); span.textContent = line || ' '; return span; });
   $('syncDiff').replaceChildren(...lines); $('syncDiff').scrollTop = 0;
 }

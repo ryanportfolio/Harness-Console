@@ -56,9 +56,10 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
       }
       if (req.method === 'GET' && url.pathname === '/api/sync/compare') {
         // Compares the exact commits the page was shown: the scanned origin/main and template head.
+        // The page names both, so a newer scan from another tab is refused rather than shown under old labels.
         const repo = lastScan?.repos.find(item => item.id === url.searchParams.get('id'));
         const name = url.searchParams.get('name');
-        if (!repo?.skills?.some(skill => skill.name === name && skill.status !== 'off')) return reply(res, 404, { error: 'Check repositories again.' });
+        if (!repo?.skills?.some(skill => skill.name === name && skill.status !== 'off') || url.searchParams.get('rev') !== repo.head || url.searchParams.get('template') !== lastScan.template.head) return reply(res, 404, { error: 'Check repositories again.' });
         try { return reply(res, 200, { name, diff: await compareSync({ folder: repo.folder, rev: repo.head, name, templateHead: lastScan.template.head }) }); }
         catch (error) { return reply(res, 502, { error: `Could not compare ${name}. ${error.message}` }); }
       }

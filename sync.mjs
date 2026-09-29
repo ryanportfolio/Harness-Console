@@ -279,6 +279,7 @@ async function templateBlobs(template, entries, execute) {
 // Unified diff from a repository's copy of one skill at rev to the template copy a sync would write.
 // Each side holds the folders a sync touches: the Claude copy, plus the .agents copy where it is
 // native, Codex-only, or hand-written here. A generated adapter is left out; the generator rebuilds it.
+// A removal deletes every folder of the skill, so its template side is empty.
 export async function compareSkill({ folder, rev, name, templateHead, template = latestTemplate, execute = run }) {
   if (!SKILL_NAME.test(name)) throw new Error('Invalid skill name.');
   if (!template || template.head !== templateHead) throw new Error('Check repositories again.');
@@ -286,12 +287,16 @@ export async function compareSkill({ folder, rev, name, templateHead, template =
   const { skills, nativeCopies } = await compareRepo({ template, folder, rev, execute });
   const skill = skills.find(item => item.name === name);
   if (!skill) throw new Error(`${name} is not a Harness skill in this repository.`);
-  const codex = skill.codex || template.codexOnly.has(name);
-  const ours = PARTS.filter(part => part === PARTS[0] ? !codex : codex || nativeCopies.has(name) || skill.handCodex);
-  const theirs = PARTS.filter(part => template.current[part].has(name) && (part === PARTS[0] ? !codex : codex || nativeCopies.has(name)));
-  // Symlinks are written as their target text; submodules have no bytes to show.
-  const files = async (read, tree, parts) => parts.length ? parseTree(await read(['ls-tree', '-z', '-r', tree, '--', ...parts.map(part => `${part}/${name}/`)])).filter(entry => entry.type === 'blob') : [];
+  const codex = skill.codex || template.codexOnly.has(name), removal = ['removed', 'removed-edited'].includes(skill.status);
+  const ours = PARTS.filter(part => part === PARTS[0] ? !codex : codex || removal || nativeCopies.has(name) || skill.handCodex);
+  const theirs = removal ? [] : PARTS.filter(part => template.current[part].has(name) && (part === PARTS[0] ? !codex : codex || nativeCopies.has(name)));
+  // No trailing slash: a file or symlink where the skill folder belongs is listed too, since a
+  // replacement deletes it. Symlinks are written as their target text; submodules have no bytes.
+  const files = async (read, tree, parts) => parts.length ? parseTree(await read(['ls-tree', '-z', '-r', tree, '--', ...parts.map(part => `${part}/${name}`)])).filter(entry => entry.type === 'blob') : [];
   const mine = await files(git, rev, ours), incoming = await files(template.git, template.head, theirs);
+  // Scratch files carry no Git mode, so a sync's executable-bit change is listed ahead of the diff.
+  const modes = new Map(mine.map(entry => [entry.path, entry.mode]));
+  const modeLines = incoming.filter(entry => modes.has(entry.path) && modes.get(entry.path) !== entry.mode).map(entry => `mode ${modes.get(entry.path)} -> ${entry.mode}: ${entry.path}\n`).join('');
   await templateBlobs(template, incoming, execute);
   const local = mine.length ? await readBlobs((await git(['rev-parse', '--absolute-git-dir'])).trim(), [...new Set(mine.map(entry => entry.sha))]) : new Map();
   const scratch = await mkdtemp(path.join(tmpdir(), 'corewise-sync-compare-'));
@@ -309,7 +314,7 @@ export async function compareSkill({ folder, rev, name, templateHead, template =
       const child = spawn('git', ['diff', '--no-index', '--no-color', '--', 'repo', 'harness-firmware'], { cwd: scratch, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
       let out = '', err = ''; child.stdout.on('data', data => { out += data; }); child.stderr.on('data', data => { err += data; });
       child.on('error', reject);
-      child.on('close', code => code <= 1 ? resolve((out || 'No differences.\n').slice(0, 200_000)) : reject(new Error(err.trim() || `git diff exited with code ${code}`)));
+      child.on('close', code => code <= 1 ? resolve((`${modeLines}${out}` || 'No differences.\n').slice(0, 200_000)) : reject(new Error(err.trim() || `git diff exited with code ${code}`)));
     });
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }

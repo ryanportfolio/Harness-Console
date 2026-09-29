@@ -133,10 +133,10 @@ test('sync compare route reads only a scanned repository and skill at the scanne
   t.after(() => new Promise(resolve => server.close(resolve)));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const get = async route => { const response = await fetch(`${origin}${route}`); return { status: response.status, body: await response.json() }; };
-  assert.equal((await get('/api/sync/compare?id=owner/project&name=alpha')).status, 404);
+  assert.equal((await get('/api/sync/compare?id=owner/project&name=alpha&rev=def&template=abc')).status, 404);
   await get('/api/sync');
-  for (const query of ['id=owner/other&name=alpha', 'id=owner/project&name=beta', 'id=owner/project&name=off']) assert.equal((await get(`/api/sync/compare?${query}`)).status, 404, query);
-  assert.deepEqual((await get('/api/sync/compare?id=owner/project&name=alpha')).body, { name: 'alpha', diff: 'diff text' });
+  for (const query of ['id=owner/other&name=alpha&rev=def&template=abc', 'id=owner/project&name=beta&rev=def&template=abc', 'id=owner/project&name=off&rev=def&template=abc', 'id=owner/project&name=alpha&rev=old&template=abc', 'id=owner/project&name=alpha&rev=def&template=old', 'id=owner/project&name=alpha']) assert.equal((await get(`/api/sync/compare?${query}`)).status, 404, query);
+  assert.deepEqual((await get('/api/sync/compare?id=owner/project&name=alpha&rev=def&template=abc')).body, { name: 'alpha', diff: 'diff text' });
   assert.deepEqual(compared, [{ folder: 'C:/CoreWise/project', rev: 'def', name: 'alpha', templateHead: 'abc' }]);
 });
 
