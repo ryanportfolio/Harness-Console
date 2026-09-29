@@ -14,21 +14,41 @@ dirty/untracked content. Capture enough baseline to distinguish existing work. S
 Use path/content hashes for relevant dirty and untracked content; exclude task-owned
 report artifacts. Review evidence applies to that content; relevant later edits require renewed review.
 
+An author brief is optional: facts only (the goal in one or two sentences, the files or
+behaviors most likely to break, related work in flight such as other PRs or merge order,
+and checks already run with results), never a verdict. The caller may supply one, or the
+Manager writes one when reviewing work this session wrote.
+
 When the diff extracts repeated operations or changes a shared boundary, read
 [selective shared-code refactoring](references/shared-code-refactoring.md)
 and include its applicable caller and invariant checks in reviewer briefs.
+
+When the user asks for a strict, harsh, or deep maintainability review, read the
+[strict quality rubric](strict-quality-rubric.md) and append it to the brief of the
+reviewer covering missing integration/cleanup (the sole reviewer on a small change). It adds maintainability blockers on top
+of the normal areas; correctness coverage is unchanged.
 
 ## Dispatch
 
 Use currently exposed native agents first. Spawn with `fork_turns: "none"` or the runtime's
 actual fresh-context equivalent. Do not pass Manager reasoning or an author's proposed
 verdict. Give each reviewer scope, raw artifacts, relevant constraints, and these rules.
+The author brief goes to the intent reviewer only; every other reviewer gets the diff without it.
 Each is a leaf reviewer: no agents or review subprocesses of its own, no fixes or Git writes.
 
 For a small, low-risk change, use one independent reviewer. For broader work, cover all
 five areas, assigning reviewers or bounded batches according to actual available capacity:
 correctness/types; data flow/compatibility/failures; performance/security/observability;
-missing integration/cleanup; project-specific rules. Count Manager and other active agents
+missing integration/cleanup; project-specific rules. With an author brief, at either size, add one
+intent reviewer: diff plus brief, checking whether the change achieves its stated goal on every path
+the goal implies, which required cases it leaves unhandled, whether the areas the brief calls risky are
+actually safe, how it interacts with the related work named, and whether the checks run cover the risky
+parts. The brief is framing, not evidence: findings come from the code. For every diff except a tiny one
+(under 50 changed lines in one file, with no schema, auth, or cache code), also add one open-lens reviewer: diff plus the names of the lenses already assigned (never their findings or the brief).
+It chooses the one or two lenses most likely to find a real problem that no assigned reviewer covers, from the
+unassigned areas or any lens the diff calls for (rendering and frame budget, accessibility, concurrency,
+cross-platform shell and path behavior, cost, user-facing copy), names each with the diff lines that make it
+relevant, then reviews through it. A lens without a reason tied to this diff is a failed review. Count Manager and other active agents
 against capacity; state worker and retry bounds. Wait and release completed agents when supported before starting a new
 batch. Preserve independent context even when execution is sequential.
 
@@ -62,7 +82,11 @@ uncertainty; do not invent issues or promote style preferences into correctness 
 Finding nothing is valid.
 
 Manager deduplicates and tries to refute findings against the actual source. Confirm,
-dismiss with evidence, or retain explicit uncertainty. Rank globally by impact. Report
-actionable findings, material unavailable checks, reviewed scope, and recommendation.
+dismiss with evidence, or retain explicit uncertainty. When the intent reviewer ran, tag each
+finding blind (diff-only reviewers), intent, or both; flag a blind-only finding in an area the
+brief called risky or covered. Rank globally by impact. Report
+actionable findings, material unavailable checks, reviewed scope, whether the intent reviewer ran, each standard
+area that had no reviewer with a one-line reason tied to the diff, the lenses the open-lens reviewer chose with
+its reasons, and recommendation.
 Keep speculative concerns separate from verified defects. Fix only when requested or
 already authorized, then independently recheck affected claims.

@@ -22,6 +22,24 @@
     "writing-plans": "native",
     "writing-skills": "disabled",
     "long-horizon-workflows": "disabled",
-    "verify-this": "native"
+    "adopt-repo": "native",
+    "advocate": "native",
+    "arena": "native",
+    "astra-review": "native",
+    "babysit-ci": "native",
+    "claude-review": "native",
+    "codex-review": "native",
+    "dare": "native",
+    "forge-repo-ui-skill": "native",
+    "lab": "native",
+    "optimize-context": "native",
+    "session-hub": "native",
+    "sync-starter": "native",
+    "astra-fullreview": "disabled",
+    "codex-fullreview": "disabled",
+    "compact-review": "disabled",
+    "long-horizon-swarm": "disabled",
+    "external-review": "native",
+    "opus-fullreview": "native"
   }
 }

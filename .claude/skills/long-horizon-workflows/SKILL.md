@@ -57,6 +57,7 @@ Residue: <paths a failed earlier round left changed, and whether they were rever
 
 Only audit-passed results enter **Verified progress**. Resume from the existing state file
 and reconcile it with the actual workspace and latest user instructions.
+A state file marked `Swarm: on` also follows the `long-horizon-swarm` skill.
 
 Preserve the original contract. Explicit user changes become versioned amendments; reassess
 affected steps and invalidate affected claims before using them as prerequisites. Never weaken
@@ -409,11 +410,11 @@ session:
 codex login status
 ```
 
-Logged in: one `codex exec` run (custom prompt, no scope selector) carrying the contract, the
+Logged in, or a `model_provider` gateway set in `config.toml` in `$CODEX_HOME` (default `~/.codex`): one `codex exec` run (custom prompt, no scope selector) carrying the contract, the
 audit log, and Dead ends, asking for a plateau diagnosis and a different strategy. See the
 `codex-review` skill for current local preflight, CLI mechanics, and run identity. Its answer
 is an opinion: check the proposal against the current contract version and acceptance checks
-before it rewrites Remaining, and drop anything that drifts. Not logged in or the run fails:
+before it rewrites Remaining, and drop anything that drifts. Neither, or the run fails:
 skip it, the rewrite rules above stand on their own.
 
 One consult per trigger. Each run bills the user's Codex subscription, which is why this hangs
