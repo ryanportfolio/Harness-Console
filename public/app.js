@@ -270,8 +270,8 @@ function storyCard(id, name, role, side, sinceLabel) {
   const card = el('div', 'compare-card', el('span', 'compare-role', role), el('h3', '', name));
   if (!side?.last) { card.append(el('p', 'compare-quiet', 'No commits touch this skill here.')); return card; }
   card.append(el('p', '', 'Last changed ', el('b', '', shortDate(side.last.date)), ` by ${side.last.author}`));
-  if (!side.since.length) card.append(el('p', 'compare-quiet', sinceLabel.none));
-  else { const shown = side.since.slice(0, 5); card.append(el('p', 'compare-quiet', sinceLabel.some(side.since.length)), el('ul', 'compare-commits', ...shown.map(commit => commitRow(id, commit)), side.since.length > shown.length && el('li', 'compare-quiet', `and ${side.since.length - shown.length} older`))); }
+  if (!side.count) card.append(el('p', 'compare-quiet', sinceLabel.none));
+  else { const shown = side.since.slice(0, 5); card.append(el('p', 'compare-quiet', sinceLabel.some(side.count)), el('ul', 'compare-commits', ...shown.map(commit => commitRow(id, commit)), side.count > shown.length && el('li', 'compare-quiet', `and ${side.count - shown.length} older`))); }
   return card;
 }
 function storyVerdict(repo, skill) {
@@ -298,11 +298,18 @@ function renderStory(repo, skill, story) {
   box.append(matched);
 }
 // Unified diff to files of hunks; paths drop the scratch side names (repo/, harness-firmware/).
+// Git quotes a path holding a quote, backslash or control character ("b/...", C escapes); the
+// server turns off core.quotePath, so other characters arrive as they are. A trailing carriage
+// return goes, so lines compare equal to the shared copy's lines.
+const unquote = path => path.startsWith('"') ? path.slice(1, -1).replace(/\\(["\\tn])/g, (_, c) => ({ t: '\t', n: '\n' })[c] ?? c) : path;
 function parseDiff(text) {
   const files = [], notes = []; let file = null, hunk = null;
-  for (const line of text.replace(/\n$/, '').split('\n')) {
-    const head = /^diff --git a\/(?:repo|harness-firmware)\/(.+?) b\/(?:repo|harness-firmware)\/(.+)$/.exec(line);
-    if (head) { file = { path: head[2], state: 'changed', hunks: [], binary: false }; files.push(file); hunk = null; continue; }
+  for (const raw of text.replace(/\n$/, '').split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    if (line.startsWith('diff --git ')) {
+      const head = /\s("?)b\/(?:repo|harness-firmware)\/(.+)$/.exec(line);
+      file = { path: head ? unquote(`${head[1]}${head[2]}`) : line.slice(11), state: 'changed', hunks: [], binary: false }; files.push(file); hunk = null; continue;
+    }
     if (!file) { if (line.trim() && line !== 'No differences.') notes.push(line); continue; }
     if (line.startsWith('new file')) file.state = 'added'; else if (line.startsWith('deleted file')) file.state = 'deleted';
     else if (line.startsWith('Binary files')) file.binary = true;
@@ -339,10 +346,15 @@ function creditBlock(dels, adds, base, fallback) {
 }
 function renderDiff(repo, skill, story, diff) {
   // A copy the repository never edited (behind, new, retired) differs only by template changes.
-  const fallback = ['behind', 'new', 'removed'].includes(skill.status) ? 'harness' : 'unknown';
+  // A side with no commits since both copies matched made none of the differences: that credit is exact.
+  const untouched = ['behind', 'new', 'removed'].includes(skill.status) || Boolean(story?.base && !story.repo.count);
+  const fallback = untouched ? 'harness' : story?.base?.harness && !story.harness.count ? 'repo' : 'unknown';
+  const exact = untouched || fallback === 'repo';
   const { files, notes } = parseDiff(diff), who = repo.name, tally = { repo: 0, harness: 0, both: 0, unknown: 0 };
   const LABELS = { repo: [`Changed in ${who}`, 'A sync undoes this change.'], harness: ['Newer in Harness-Firmware', 'A sync brings this in.'], both: ['Changed on both sides', `A sync keeps the Harness-Firmware version and drops ${who}'s.`], unknown: ['Differs', 'A sync writes the Harness-Firmware version.'] };
-  const baseFor = path => { if (!story?.base) return null; const prefix = `${story.part}/`; if (!path.startsWith(prefix)) return null; return new Set((story.baseFiles[path] ?? '').replace(/\r/g, '').split('\n')); };
+  // Both sides changed: credit each line by whether the shared copy had it. A repeated or moved line
+  // can land on the wrong side, so the summary says the credit is estimated.
+  const baseFor = path => exact || !story?.base?.harness || !/^\.(claude|agents)\/skills\//.test(path) ? null : new Set((story.baseFiles[path] ?? '').replace(/\r/g, '').split('\n'));
   const sections = files.map(file => {
     const base = baseFor(file.path), segments = file.path.split('/'), shortPath = segments.slice(3).join('/') || file.path;
     const state = { added: 'Only in Harness-Firmware: a sync adds this file', deleted: `Only in ${who}: a sync deletes this file`, changed: 'In both, with differences' }[file.state];
@@ -366,7 +378,7 @@ function renderDiff(repo, skill, story, diff) {
   });
   const total = tally.repo + tally.harness + tally.both + tally.unknown;
   const parts = [tally.repo && `${tally.repo} made in ${who}`, tally.harness && `${tally.harness} newer in Harness-Firmware`, tally.both && `${tally.both} changed on both sides`].filter(Boolean);
-  const summary = el('p', 'compare-summary', !files.length ? 'The two copies are identical.' : `${total} ${total === 1 ? 'difference' : 'differences'} in ${files.length} ${files.length === 1 ? 'file' : 'files'}${parts.length ? `: ${parts.join(', ')}` : ''}.`);
+  const summary = el('p', 'compare-summary', !files.length ? 'The two copies are identical.' : `${total} ${total === 1 ? 'difference' : 'differences'} in ${files.length} ${files.length === 1 ? 'file' : 'files'}${parts.length ? `: ${parts.join(', ')}` : ''}.${!exact && story?.base?.harness ? ' Both sides changed this skill, so each difference is credited by matching lines against the last shared copy; a moved or repeated line can be credited to the wrong side.' : ''}`);
   const legend = el('div', 'compare-legend', el('span', 'key-repo', `Changed in ${who}`), el('span', 'key-harness', 'Newer in Harness-Firmware'), el('span', 'key-both', 'Both sides'), el('span', 'key-del', `Text in ${who} now`), el('span', 'key-add', 'Text after a sync'));
   const raw = el('details', 'compare-raw', el('summary', '', 'Raw diff'), el('pre', '', diff));
   $('syncDiff').replaceChildren(summary, legend, ...notes.map(note => el('p', 'compare-quiet', note)), ...sections, raw); $('syncCompare').scrollTop = 0;

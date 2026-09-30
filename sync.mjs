@@ -311,7 +311,7 @@ export async function compareSkill({ folder, rev, name, templateHead, template =
     };
     await write('repo', mine, local); await write('harness-firmware', incoming, template.blobs);
     return await new Promise((resolve, reject) => {
-      const child = spawn('git', ['diff', '--no-index', '--no-color', '--', 'repo', 'harness-firmware'], { cwd: scratch, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn('git', ['-c', 'core.quotePath=false', 'diff', '--no-index', '--no-color', '--', 'repo', 'harness-firmware'], { cwd: scratch, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
       let out = '', err = ''; child.stdout.on('data', data => { out += data; }); child.stderr.on('data', data => { err += data; });
       child.on('error', reject);
       child.on('close', code => code <= 1 ? resolve((`${modeLines}${out}` || 'No differences.\n').slice(0, 200_000)) : reject(new Error(err.trim() || `git diff exited with code ${code}`)));
@@ -330,32 +330,46 @@ function treesAt(gitArgs, specs) {
     child.stdin.end(specs.map(spec => `${spec}\n`).join(''));
   });
 }
-const commitsOf = async (read, rev, target) => (await read(['log', '-n', '40', '--format=%H%x1f%cI%x1f%an%x1f%s', rev, '--', target])).split(/\r?\n/).filter(Boolean)
+const commitsOf = async (read, rev, targets) => (await read(['log', '--format=%H%x1f%cI%x1f%an%x1f%s', rev, '--', ...targets])).split(/\r?\n/).filter(Boolean)
   .map(line => { const [sha, date, author, subject] = line.split('\x1f'); return { sha, date, author, subject }; });
+const STORY_SHOWN = 20;
 
 // Where one skill copy came from, for the compare view: the newest repository commit whose copy
 // matches a template version (the last time both sides agreed), the commits on each side since,
 // and that shared copy's text, so each changed line can be credited to the side that changed it.
+// History covers the Codex copy too where a sync maintains it (native or hand-written), so an edit to
+// that copy alone still counts; a generated adapter is rebuilt by the repository and is left out.
 export async function skillStory({ folder, rev, name, templateHead, template = latestTemplate, execute = run }) {
   if (!SKILL_NAME.test(name)) throw new Error('Invalid skill name.');
   if (!template || template.head !== templateHead) throw new Error('Check repositories again.');
-  const part = template.history[PARTS[0]].has(name) ? PARTS[0] : PARTS[1], target = `${part}/${name}`;
+  const targets = PARTS.map(part => `${part}/${name}`), key = template.history[PARTS[0]].has(name) ? 0 : 1, other = 1 - key;
+  const { skills, nativeCopies } = await compareRepo({ template, folder, rev, execute });
+  const maintained = key === 0 && (nativeCopies.has(name) || Boolean(skills.find(item => item.name === name)?.handCodex));
+  const paths = maintained ? targets : [targets[key]];
   const git = args => execute('git', ['-C', folder, ...args]);
-  const [ours, theirs] = await Promise.all([commitsOf(git, rev, target), commitsOf(template.git, template.head, target)]);
-  const [ourTrees, theirTrees] = await Promise.all([treesAt(['-C', folder], ours.map(item => `${item.sha}:${target}`)), treesAt(['--git-dir', template.cache], theirs.map(item => `${item.sha}:${target}`))]);
-  const known = template.history[part].get(name) ?? new Set();
-  const at = ourTrees.findIndex(tree => tree && known.has(tree)), base = at < 0 ? null : ourTrees[at], from = base ? theirTrees.indexOf(base) : -1;
+  const [ours, theirs] = await Promise.all([commitsOf(git, rev, paths), commitsOf(template.git, template.head, paths)]);
+  // Trees per commit, one list per folder: [claudeTrees, codexTrees].
+  const trees = (gitArgs, commits) => Promise.all(targets.map(target => treesAt(gitArgs, commits.map(item => `${item.sha}:${target}`))));
+  const [ourTrees, theirTrees] = await Promise.all([trees(['-C', folder], ours), trees(['--git-dir', template.cache], theirs)]);
+  // A match: the main folder is a template copy, and a maintained Codex copy is absent or one too.
+  const known = template.history[PARTS[key]].get(name) ?? new Set(), otherKnown = template.history[PARTS[other]].get(name) ?? new Set();
+  let at = ourTrees[key].findIndex((tree, index) => tree && known.has(tree) && (!maintained || !ourTrees[other][index] || otherKnown.has(ourTrees[other][index])));
+  if (at < 0) at = ourTrees[key].findIndex(tree => tree && known.has(tree));
+  // The template commit that copy came from: the newest with the same folders.
+  const same = (index, part) => theirTrees[part][index] === ourTrees[part][at];
+  let from = -1;
+  if (at >= 0) { from = theirs.findIndex((_, index) => same(index, key) && (!maintained || same(index, other))); if (from < 0) from = theirs.findIndex((_, index) => same(index, key)); }
   const baseFiles = {};
-  if (base) {
-    const entries = parseTree(await template.git(['ls-tree', '-z', '-r', base])).filter(entry => entry.type === 'blob' && entry.mode !== '120000');
+  if (from >= 0) {
+    const entries = parseTree(await template.git(['ls-tree', '-z', '-r', theirs[from].sha, '--', ...paths.map(target => `${target}/`)])).filter(entry => entry.type === 'blob' && entry.mode !== '120000');
     await templateBlobs(template, entries, execute);
-    for (const entry of entries) baseFiles[`${target}/${entry.path}`] = template.blobs.get(entry.sha)?.toString('utf8') ?? '';
+    for (const entry of entries) baseFiles[entry.path] = template.blobs.get(entry.sha)?.toString('utf8') ?? '';
   }
+  const side = (commits, index) => { const since = index < 0 ? commits : commits.slice(0, index); return { last: commits[0] ?? null, since: since.slice(0, STORY_SHOWN), count: since.length }; };
   return {
-    template: TEMPLATE, part,
-    repo: { last: ours[0] ?? null, since: at < 0 ? ours : ours.slice(0, at) },
-    harness: { last: theirs[0] ?? null, since: from < 0 ? theirs : theirs.slice(0, from) },
-    base: base ? { repo: ours[at], harness: theirs[from] ?? null } : null,
+    template: TEMPLATE,
+    repo: side(ours, at), harness: side(theirs, from),
+    base: at >= 0 ? { repo: ours[at], harness: theirs[from] ?? null } : null,
     baseFiles,
   };
 }
