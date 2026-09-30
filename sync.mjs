@@ -319,6 +319,47 @@ export async function compareSkill({ folder, rev, name, templateHead, template =
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }
 
+// Tree hash of each "<commit>:<path>" spec through one `git cat-file --batch-check`; null where absent.
+function treesAt(gitArgs, specs) {
+  if (!specs.length) return Promise.resolve([]);
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', [...gitArgs, 'cat-file', '--batch-check'], { windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '', err = ''; child.stdout.on('data', data => { out += data; }); child.stderr.on('data', data => { err += data; });
+    child.on('error', reject);
+    child.on('close', code => code === 0 ? resolve(out.split(/\r?\n/).filter(Boolean).map(line => { const [sha, type] = line.split(' '); return type === 'tree' ? sha : null; })) : reject(new Error(err.trim() || `git cat-file exited with code ${code}`)));
+    child.stdin.end(specs.map(spec => `${spec}\n`).join(''));
+  });
+}
+const commitsOf = async (read, rev, target) => (await read(['log', '-n', '40', '--format=%H%x1f%cI%x1f%an%x1f%s', rev, '--', target])).split(/\r?\n/).filter(Boolean)
+  .map(line => { const [sha, date, author, subject] = line.split('\x1f'); return { sha, date, author, subject }; });
+
+// Where one skill copy came from, for the compare view: the newest repository commit whose copy
+// matches a template version (the last time both sides agreed), the commits on each side since,
+// and that shared copy's text, so each changed line can be credited to the side that changed it.
+export async function skillStory({ folder, rev, name, templateHead, template = latestTemplate, execute = run }) {
+  if (!SKILL_NAME.test(name)) throw new Error('Invalid skill name.');
+  if (!template || template.head !== templateHead) throw new Error('Check repositories again.');
+  const part = template.history[PARTS[0]].has(name) ? PARTS[0] : PARTS[1], target = `${part}/${name}`;
+  const git = args => execute('git', ['-C', folder, ...args]);
+  const [ours, theirs] = await Promise.all([commitsOf(git, rev, target), commitsOf(template.git, template.head, target)]);
+  const [ourTrees, theirTrees] = await Promise.all([treesAt(['-C', folder], ours.map(item => `${item.sha}:${target}`)), treesAt(['--git-dir', template.cache], theirs.map(item => `${item.sha}:${target}`))]);
+  const known = template.history[part].get(name) ?? new Set();
+  const at = ourTrees.findIndex(tree => tree && known.has(tree)), base = at < 0 ? null : ourTrees[at], from = base ? theirTrees.indexOf(base) : -1;
+  const baseFiles = {};
+  if (base) {
+    const entries = parseTree(await template.git(['ls-tree', '-z', '-r', base])).filter(entry => entry.type === 'blob' && entry.mode !== '120000');
+    await templateBlobs(template, entries, execute);
+    for (const entry of entries) baseFiles[`${target}/${entry.path}`] = template.blobs.get(entry.sha)?.toString('utf8') ?? '';
+  }
+  return {
+    template: TEMPLATE, part,
+    repo: { last: ours[0] ?? null, since: at < 0 ? ours : ours.slice(0, at) },
+    harness: { last: theirs[0] ?? null, since: from < 0 ? theirs : theirs.slice(0, from) },
+    base: base ? { repo: ours[at], harness: theirs[from] ?? null } : null,
+    baseFiles,
+  };
+}
+
 // Replaces whole skill folders: dropped folders go, template folders arrive byte for byte.
 async function writeFolders(template, worktree, git, replace, drop, execute) {
   const entries = await templateFiles(template, replace, execute);

@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { run } from '../core.mjs';
-import { applySkills, compareSkill, githubId, normalizeSelection, openTemplate, scanSkills, staleWorktrees } from '../sync.mjs';
+import { applySkills, compareSkill, githubId, normalizeSelection, openTemplate, scanSkills, skillStory, staleWorktrees } from '../sync.mjs';
 
 const put = async (dir, file, text) => { await mkdir(path.dirname(path.join(dir, file)), { recursive: true }); await writeFile(path.join(dir, file), text); };
 const commit = async (dir, message) => { await run('git', ['-C', dir, 'add', '-A']); await run('git', ['-C', dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', message]); };
@@ -82,6 +82,24 @@ test('compare diffs the scanned main copy against the template copy a sync would
   assert.ok((await diff('gamma')).includes('-gamma v1'));
   await assert.rejects(compareSkill({ folder: repo.folder, rev: repo.head, name: 'alpha', templateHead: 'other' }), /Check repositories again/);
   await assert.rejects(diff('mine'), /not a Harness skill/);
+});
+
+test('story names the last copy both sides shared and the commits each side made since', async t => {
+  const data = await fixture(t);
+  const result = await scanSkills({ root: data.root, template: await data.opened() });
+  const [repo] = result.repos;
+  const story = name => skillStory({ folder: repo.folder, rev: repo.head, name, templateHead: result.template.head });
+  // alpha arrived as template v1 and was never edited; the template moved on to v2.
+  const alpha = await story('alpha');
+  assert.equal(alpha.part, '.claude/skills');
+  assert.equal(alpha.base.repo.subject, 'spawned'); assert.equal(alpha.base.harness.subject, 'v1');
+  assert.deepEqual(alpha.repo.since, []); assert.deepEqual(alpha.harness.since.map(item => item.subject), ['v2']);
+  assert.equal(alpha.baseFiles['.claude/skills/alpha/SKILL.md'], 'alpha v1\n');
+  assert.equal(alpha.repo.last.author, 'Test'); assert.match(alpha.repo.last.date, /^\d{4}-\d{2}-\d{2}T/);
+  // beta was edited before its first commit here, so no copy ever matched the template.
+  const beta = await story('beta');
+  assert.equal(beta.base, null); assert.deepEqual(beta.repo.since.map(item => item.subject), ['spawned']); assert.deepEqual(beta.baseFiles, {});
+  await assert.rejects(skillStory({ folder: repo.folder, rev: repo.head, name: 'alpha', templateHead: 'other' }), /Check repositories again/);
 });
 
 test('compare shows a file where a skill folder belongs and every folder a removal deletes', async t => {

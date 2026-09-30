@@ -127,6 +127,7 @@ test('sync compare route reads only a scanned repository and skill at the scanne
     adapter: { account: async () => ({ connected: true, login: 'fixture' }) },
     scan: async () => ({ template: { head: 'abc' }, repos: [{ id: 'owner/project', name: 'project', folder: 'C:/CoreWise/project', head: 'def', skills: [{ name: 'alpha', status: 'behind' }, { name: 'off', status: 'off' }] }] }),
     compareSync: async args => { compared.push(args); return 'diff text'; },
+    storySync: async () => { throw new Error('no history'); },
     preferences: 'nonexistent-fixture-preferences',
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -136,7 +137,7 @@ test('sync compare route reads only a scanned repository and skill at the scanne
   assert.equal((await get('/api/sync/compare?id=owner/project&name=alpha&rev=def&template=abc')).status, 404);
   await get('/api/sync');
   for (const query of ['id=owner/other&name=alpha&rev=def&template=abc', 'id=owner/project&name=beta&rev=def&template=abc', 'id=owner/project&name=off&rev=def&template=abc', 'id=owner/project&name=alpha&rev=old&template=abc', 'id=owner/project&name=alpha&rev=def&template=old', 'id=owner/project&name=alpha']) assert.equal((await get(`/api/sync/compare?${query}`)).status, 404, query);
-  assert.deepEqual((await get('/api/sync/compare?id=owner/project&name=alpha&rev=def&template=abc')).body, { name: 'alpha', diff: 'diff text' });
+  assert.deepEqual((await get('/api/sync/compare?id=owner/project&name=alpha&rev=def&template=abc')).body, { name: 'alpha', diff: 'diff text', story: null });
   assert.deepEqual(compared, [{ folder: 'C:/CoreWise/project', rev: 'def', name: 'alpha', templateHead: 'abc' }]);
 });
 
