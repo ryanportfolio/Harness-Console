@@ -466,9 +466,9 @@ function renderSync() {
   $('syncTools').hidden = !actionable.length;
   renderSyncFoot();
 }
-// Page-wide selection: updates and additions only; removals and replacements are always picked one by one.
+// Page-wide selection: updates, additions and edited copies; removals are always picked one by one.
 function setAllSync(on) {
-  for (const input of $('syncRepos').querySelectorAll(on ? 'input[data-action="apply"]' : 'input[data-skill]')) input.checked = on;
+  for (const input of $('syncRepos').querySelectorAll(on ? 'input[data-action="apply"], input[data-action="replace"]' : 'input[data-skill]')) input.checked = on;
   for (const repo of sync.data?.repos ?? []) syncRepoToggle(repo.id);
   sync.armed = false; renderSyncFoot();
 }
