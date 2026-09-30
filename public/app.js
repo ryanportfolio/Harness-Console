@@ -261,18 +261,136 @@ function compareButton(repo, skill, extra = '') {
   button.title = `Show how ${repo.name}'s copy differs from Harness-Firmware`; button.onclick = () => void compareSync(repo, skill); return button;
 }
 let compareRequest = 0;
+const el = (tag, className, ...children) => { const node = document.createElement(tag); if (className) node.className = className; node.append(...children.filter(child => child !== null && child !== undefined && child !== false)); return node; };
+const shortDate = iso => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+const commitLink = (id, commit) => { const a = el('a', 'compare-sha', commit.sha.slice(0, 7)); a.href = `https://github.com/${id}/commit/${commit.sha}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = `Open this commit on GitHub (new tab)`; return a; };
+const commitRow = (id, commit) => el('li', '', el('span', 'compare-date', shortDate(commit.date)), ' ', commit.subject, ' ', el('span', 'compare-by', `by ${commit.author}`), ' ', commitLink(id, commit));
+// One side of the story: when that copy last changed, and what changed it since both sides matched.
+function storyCard(id, name, role, side, sinceLabel) {
+  const card = el('div', 'compare-card', el('span', 'compare-role', role), el('h3', '', name));
+  if (!side?.last) { card.append(el('p', 'compare-quiet', 'No commits touch this skill here.')); return card; }
+  card.append(el('p', '', 'Last changed ', el('b', '', shortDate(side.last.date)), ` by ${side.last.author}`));
+  if (!side.count) card.append(el('p', 'compare-quiet', sinceLabel.none));
+  else { const shown = side.since.slice(0, 5); card.append(el('p', 'compare-quiet', sinceLabel.some(side.count)), el('ul', 'compare-commits', ...shown.map(commit => commitRow(id, commit)), side.count > shown.length && el('li', 'compare-quiet', `and ${side.count - shown.length} older`))); }
+  return card;
+}
+function storyVerdict(repo, skill) {
+  const who = repo.name, name = skill.name;
+  return {
+    behind: `${who} has an older template copy of ${name} and never edited it. A sync updates it to the newest template copy; nothing is lost.`,
+    new: `${who} does not have ${name} yet. A sync adds the template copy.`,
+    removed: `Harness-Firmware no longer has ${name}. A sync deletes it from ${who}; the copy there was never edited.`,
+    'removed-edited': `Harness-Firmware no longer has ${name}, and ${who} edited its copy. The sync leaves it alone; this view is for reference.`,
+    customized: `${who} changed ${name} after it last matched the template. A sync replaces ${who}'s copy with the template copy, so ${who}'s changes are lost.`,
+  }[skill.status] ?? `A sync writes the Harness-Firmware copy of ${name} to ${who}.`;
+}
+function renderStory(repo, skill, story) {
+  const box = $('syncStory'); box.replaceChildren(el('p', `compare-verdict${skill.status === 'customized' ? ' warn' : ''}`, storyVerdict(repo, skill)));
+  if (!story) { box.append(el('p', 'compare-quiet', 'The change history could not be read; the differences below are still accurate.')); return; }
+  const since = who => ({ none: `No changes since both copies last matched.`, some: n => `${n} ${n === 1 ? 'change' : 'changes'} ${who} since both copies last matched:` });
+  box.append(el('div', 'compare-cards',
+    storyCard(repo.id, repo.name, 'Now on main', story.repo, since(`made in ${repo.name}`)),
+    el('div', 'compare-arrow', el('span', '', 'a sync replaces'), el('span', '', '←')),
+    storyCard(story.template, 'Harness-Firmware', 'Template copy a sync writes', story.harness, since('made in the template'))));
+  const matched = story.base
+    ? el('p', 'compare-base', 'Both copies last matched on ', el('b', '', shortDate(story.base.repo.date)), `, when ${repo.name} got commit `, commitLink(repo.id, story.base.repo), ` "${story.base.repo.subject}".`)
+    : el('p', 'compare-base', `${repo.name}'s copy never matched a template version on record, so changes below are not credited to one side.`);
+  box.append(matched);
+}
+// Unified diff to files of hunks; paths drop the scratch side names (repo/, harness-firmware/).
+// Git quotes a path holding a quote, backslash or control character ("b/...", C escapes); the
+// server turns off core.quotePath, so other characters arrive as they are. A trailing carriage
+// return goes, so lines compare equal to the shared copy's lines.
+const unquote = path => path.startsWith('"') ? path.slice(1, -1).replace(/\\(["\\tn])/g, (_, c) => ({ t: '\t', n: '\n' })[c] ?? c) : path;
+function parseDiff(text) {
+  const files = [], notes = []; let file = null, hunk = null;
+  for (const raw of text.replace(/\n$/, '').split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    if (line.startsWith('diff --git ')) {
+      const head = /\s("?)b\/(?:repo|harness-firmware)\/(.+)$/.exec(line);
+      file = { path: head ? unquote(`${head[1]}${head[2]}`) : line.slice(11), state: 'changed', hunks: [], binary: false }; files.push(file); hunk = null; continue;
+    }
+    if (!file) { if (line.trim() && line !== 'No differences.') notes.push(line); continue; }
+    if (line.startsWith('new file')) file.state = 'added'; else if (line.startsWith('deleted file')) file.state = 'deleted';
+    else if (line.startsWith('Binary files')) file.binary = true;
+    else if (line.startsWith('@@')) { hunk = []; file.hunks.push(hunk); }
+    else if (hunk && /^[ +\\-]/.test(line) && !line.startsWith('\\')) hunk.push({ type: line[0], text: line.slice(1) });
+  }
+  return { files, notes };
+}
+// Word-level highlight: tokens outside the longest common token run between two lines.
+function markWords(line, other) {
+  const a = line.match(/\s+|\w+|[^\s\w]/g) ?? [], b = other.match(/\s+|\w+|[^\s\w]/g) ?? [];
+  if (a.length * b.length > 60000) return [line];
+  const dp = Array.from({ length: a.length + 1 }, () => new Uint16Array(b.length + 1));
+  for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const kept = []; let i = 0, j = 0;
+  while (i < a.length) { if (j < b.length && a[i] === b[j]) { kept.push(false); i++; j++; } else if (j < b.length && dp[i][j + 1] >= dp[i + 1][j]) j++; else { kept.push(true); i++; } }
+  // Spaces between two changed words count as changed, so a rewritten phrase reads as one mark.
+  for (let k = 1; k < a.length - 1; k++) if (!kept[k] && /^\s+$/.test(a[k]) && kept[k - 1] && kept[k + 1]) kept[k] = true;
+  // A mostly rewritten line reads better whole than as a patchwork of marks.
+  const words = a.filter(token => !/^\s+$/.test(token)).length;
+  if (a.filter((token, k) => kept[k] && !/^\s+$/.test(token)).length > words * 0.6) return [line];
+  const out = [];
+  for (let k = 0; k < a.length;) { const start = k; while (k < a.length && kept[k] === kept[start]) k++; const text = a.slice(start, k).join(''); out.push(kept[start] ? el('mark', '', text) : text); }
+  return out;
+}
+// A change block is credited by the last shared copy: a repo line absent from it, or a shared line the
+// repo dropped, is the repository's edit; a shared line the template dropped, or a new template line, is the template's.
+function creditBlock(dels, adds, base, fallback) {
+  if (!base) return fallback;
+  const real = line => line.trim() !== '';
+  const repo = dels.some(line => real(line) && !base.has(line)) || adds.some(line => real(line) && base.has(line));
+  const harness = dels.some(line => real(line) && base.has(line)) || adds.some(line => real(line) && !base.has(line));
+  return repo && harness ? 'both' : repo ? 'repo' : harness ? 'harness' : 'unknown';
+}
+function renderDiff(repo, skill, story, diff) {
+  // A copy the repository never edited (behind, new, retired) differs only by template changes.
+  // A side with no commits since both copies matched made none of the differences: that credit is exact.
+  const untouched = ['behind', 'new', 'removed'].includes(skill.status) || Boolean(story?.base && !story.repo.count);
+  const fallback = untouched ? 'harness' : story?.base?.harness && !story.harness.count ? 'repo' : 'unknown';
+  const exact = untouched || fallback === 'repo';
+  const { files, notes } = parseDiff(diff), who = repo.name, tally = { repo: 0, harness: 0, both: 0, unknown: 0 };
+  const LABELS = { repo: [`Changed in ${who}`, 'A sync undoes this change.'], harness: ['Newer in Harness-Firmware', 'A sync brings this in.'], both: ['Changed on both sides', `A sync keeps the Harness-Firmware version and drops ${who}'s.`], unknown: ['Differs', 'A sync writes the Harness-Firmware version.'] };
+  // Both sides changed: credit each line by whether the shared copy had it. A repeated or moved line
+  // can land on the wrong side, so the summary says the credit is estimated.
+  const baseFor = path => exact || !story?.base?.harness || !/^\.(claude|agents)\/skills\//.test(path) ? null : new Set((story.baseFiles[path] ?? '').replace(/\r/g, '').split('\n'));
+  const sections = files.map(file => {
+    const base = baseFor(file.path), segments = file.path.split('/'), shortPath = segments.slice(3).join('/') || file.path;
+    const state = { added: 'Only in Harness-Firmware: a sync adds this file', deleted: `Only in ${who}: a sync deletes this file`, changed: 'In both, with differences' }[file.state];
+    const section = el('section', 'compare-file', el('div', 'compare-file-head', el('b', '', shortPath), el('span', '', segments.slice(0, 3).join('/')), el('span', `compare-state ${file.state}`, state)));
+    if (file.binary) section.append(el('p', 'compare-quiet', 'Binary file; contents not shown.'));
+    for (const hunk of file.hunks) {
+      const body = el('div', 'compare-hunk');
+      for (let index = 0; index < hunk.length;) {
+        if (hunk[index].type === ' ') { const run = []; while (index < hunk.length && hunk[index].type === ' ') run.push(hunk[index++].text); body.append(el('div', 'compare-context', run.join('\n') || ' ')); continue; }
+        const dels = [], adds = [];
+        while (index < hunk.length && hunk[index].type !== ' ') (hunk[index].type === '-' ? dels : adds).push(hunk[index++].text);
+        const kind = creditBlock(dels, adds, base, fallback); tally[kind]++;
+        const [title, brings] = LABELS[kind], effect = kind === 'harness' && !adds.length ? 'A sync removes these lines.' : brings;
+        const side = (label, lines, others, cls) => lines.length && el('div', `compare-side ${cls}`, el('span', 'compare-tag', label), ...lines.map((line, at) => el('div', 'compare-line', ...(line && others[at] !== undefined ? markWords(line, others[at]) : [line || ' ']))));
+        body.append(el('div', `compare-change ${kind}`, el('p', 'compare-change-label', el('b', '', title), ` ${effect}`),
+          side(`${who} now`, dels, adds, 'del'), side('After a sync', adds, dels, 'add')));
+      }
+      section.append(body);
+    }
+    return section;
+  });
+  const total = tally.repo + tally.harness + tally.both + tally.unknown;
+  const parts = [tally.repo && `${tally.repo} made in ${who}`, tally.harness && `${tally.harness} newer in Harness-Firmware`, tally.both && `${tally.both} changed on both sides`].filter(Boolean);
+  const summary = el('p', 'compare-summary', !files.length ? 'The two copies are identical.' : `${total} ${total === 1 ? 'difference' : 'differences'} in ${files.length} ${files.length === 1 ? 'file' : 'files'}${parts.length ? `: ${parts.join(', ')}` : ''}.${!exact && story?.base?.harness ? ' Both sides changed this skill, so each difference is credited by matching lines against the last shared copy; a moved or repeated line can be credited to the wrong side.' : ''}`);
+  const legend = el('div', 'compare-legend', el('span', 'key-repo', `Changed in ${who}`), el('span', 'key-harness', 'Newer in Harness-Firmware'), el('span', 'key-both', 'Both sides'), el('span', 'key-del', `Text in ${who} now`), el('span', 'key-add', 'Text after a sync'));
+  const raw = el('details', 'compare-raw', el('summary', '', 'Raw diff'), el('pre', '', diff));
+  $('syncDiff').replaceChildren(summary, legend, ...notes.map(note => el('p', 'compare-quiet', note)), ...sections, raw); $('syncCompare').scrollTop = 0;
+}
 async function compareSync(repo, skill) {
   const request = ++compareRequest;
-  $('syncCompareTitle').textContent = `${skill.name} in ${repo.name}`;
-  $('syncCompareNote').textContent = `Lines marked - are in ${repo.id} main (${repo.head.slice(0, 7)}); lines marked + are the Harness-Firmware copy (${sync.data.template.head.slice(0, 7)}) a sync would write.`;
-  $('syncDiff').textContent = 'Loading…'; if (!$('syncCompare').open) $('syncCompare').showModal();
-  let diff;
+  $('syncCompareTitle').textContent = `${skill.name}: ${repo.name} and Harness-Firmware`;
+  $('syncStory').replaceChildren(); $('syncDiff').textContent = 'Loading…'; if (!$('syncCompare').open) $('syncCompare').showModal();
   const query = new URLSearchParams({ id: repo.id, name: skill.name, rev: repo.head, template: sync.data.template.head });
-  try { diff = (await api(`sync/compare?${query}`)).diff; } catch (error) { diff = error.message; }
+  let result; try { result = await api(`sync/compare?${query}`); } catch (error) { if (request === compareRequest) $('syncDiff').textContent = error.message; return; }
   if (request !== compareRequest) return;
-  const kind = line => /^(mode |diff |index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/.test(line) ? 'diff-meta' : line.startsWith('@@') ? 'diff-hunk' : line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : '';
-  const lines = diff.replace(/\n$/, '').split('\n').map(line => { const span = document.createElement('span'); span.className = kind(line); span.textContent = line || ' '; return span; });
-  $('syncDiff').replaceChildren(...lines); $('syncDiff').scrollTop = 0;
+  renderStory(repo, skill, result.story); renderDiff(repo, skill, result.story, result.diff);
 }
 $('syncCompareClose').onclick = () => $('syncCompare').close();
 function syncCheckbox(repo, skill, checked) {
