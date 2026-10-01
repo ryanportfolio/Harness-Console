@@ -155,6 +155,7 @@ for (const [label, text, pattern] of [
   ['unsupported version', manifestText({ version: 2 }), /version 2 is not supported/],
   ['unknown top-level key', manifestText({ extraList: [] }), /unknown field extraList/],
   ['path outside the clone', manifestText({ templateOnly: ['../escape'] }), /templateOnly has an invalid path/],
+  ['.git in another case', manifestText({ templateOnly: ['.GIT'] }), /templateOnly has an invalid path/],
   ['broken JSON', '{"version": 1,', /not valid JSON/],
 ]) {
   test(`createProject stops before any commit or push when the clone manifest has ${label}`, async t => {
@@ -169,6 +170,17 @@ test('createProject applies the clone manifest dependency rules even when the ca
   const loose = { ...catalog, dependencies: {} };
   await assert.rejects(createProject({ root: data.root, name: 'dep-app', disabledSkills: ['codex-review'], catalog: loose, execute: data.execute }), /ghost-review needs codex-review.*nothing was committed or pushed/);
   await assertStoppedBeforeCommit(data, 'dep-app');
+});
+
+test('createProject checks dependencies of clone skills the cached catalog never listed', async t => {
+  // The template gained late-review after the picker loaded its catalog; late-review needs lab.
+  const grown = structuredClone(MANIFEST);
+  grown.skills.groups[2].skills.push('late-review');
+  grown.skills.dependencies['late-review'] = ['lab'];
+  const data = await fixture(t, { manifest: `${JSON.stringify(grown, null, 2)}\n`, extra: { '.claude/skills/late-review/SKILL.md': 'late', '.agents/skills/late-review/SKILL.md': 'late' } });
+  assert.equal(catalog.skills.some(skill => skill.name === 'late-review'), false);
+  await assert.rejects(createProject({ root: data.root, name: 'late-app', disabledSkills: ['lab'], catalog, execute: data.execute }), /late-review needs lab\. Keep lab, or omit late-review too\..*nothing was committed or pushed/);
+  await assertStoppedBeforeCommit(data, 'late-app');
 });
 
 test('createProject fails when a manifest required file is missing after the strip', async t => {
@@ -193,6 +205,9 @@ test('normalizeDisabledSkills keeps catalog order, checks rules, and mergeSkillO
 test('parseManifest accepts the spec shape and rejects bad paths and skill lists', () => {
   assert.deepEqual(parseManifest(manifestText()), MANIFEST);
   for (const bad of ['/abs', 'trailing/', 'a//b', 'C:/x', 'glob/*', 'win\\path', '.git/config', './here']) assert.throws(() => parseManifest(manifestText({ templateOnly: [bad] })), /invalid path/, bad);
+  // Windows resolves each of these to the clone's .git (case, trailing dot or space, 8.3 short name).
+  for (const bad of ['.git', '.GIT', '.Git/config', '.git.', '.git ', 'GIT~1', 'git~2/HEAD', 'docs./x', 'docs /x', 'a/b.', 'a/b ']) assert.throws(() => parseManifest(manifestText({ templateOnly: [bad] })), /templateOnly has an invalid path/, bad);
+  assert.doesNotThrow(() => parseManifest(manifestText({ templateOnly: ['.github/x', 'a.b/c.d', '.gitignore'] })));
   assert.throws(() => parseManifest(manifestText({ requiredFiles: 'AGENTS.md' })), /requiredFiles must be a list/);
   assert.throws(() => parseManifest(manifestText({ readmeStub: 1 })), /readmeStub must be text/);
   const twice = structuredClone(MANIFEST); twice.skills.groups[2].skills.push('recall');

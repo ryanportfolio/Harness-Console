@@ -51,10 +51,12 @@ const KNOWN = [
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 // Repo-relative, '/'-separated, no trailing slash, no globs. Stripping deletes these paths, so an
-// entry must never reach outside the clone or into .git.
+// entry must never reach outside the clone or into .git. Windows matches names case-insensitively,
+// trims a trailing dot or space, and may answer to the 8.3 short name GIT~1, so '.GIT', '.git.',
+// '.git ' and 'git~1' would all delete the clone's .git there.
 function checkManifestPath(entry, field) {
   const segments = typeof entry === 'string' ? entry.split('/') : [];
-  if (!segments.length || segments.some(part => !part || part === '.' || part === '..' || /[\\:*?[\]]/.test(part)) || segments[0] === '.git') throw new Error(`${field} has an invalid path: ${JSON.stringify(entry)}`);
+  if (!segments.length || segments.some(part => !part || part === '.' || part === '..' || /[\\:*?[\]]/.test(part) || /[. ]$/.test(part)) || /^(\.git|git~\d+)$/i.test(segments[0])) throw new Error(`${field} has an invalid path: ${JSON.stringify(entry)}`);
 }
 
 function checkNames(list, field) {
@@ -235,7 +237,10 @@ export async function createProject({ root, name, description = '', isPrivate = 
   let manifest;
   try {
     manifest = parseManifest(manifestText, `${MANIFEST_PATH} in the new clone`);
-    checkRemovals(disabled, catalog.skills.map(skill => skill.name), manifest.skills.required, manifest.skills.dependencies);
+    // The clone can carry skills the catalog never listed (the template changed after the picker
+    // loaded); each one that stays must still have the skills it needs.
+    const cloned = new Set([...catalog.skills.map(skill => skill.name), ...manifest.skills.groups.flatMap(group => group.skills)]);
+    checkRemovals(disabled, [...cloned], manifest.skills.required, manifest.skills.dependencies);
   } catch (error) { throw new Error(`${error.message} ${untouched}`); }
 
   onOutput('Stripping template-only files and replacing README.md…\n');

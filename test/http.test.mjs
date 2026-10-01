@@ -76,6 +76,37 @@ test('skills and create routes validate input and reuse the single job slot', as
   assert.equal((await fetch(`${origin}/public/../server.mjs`)).status, 404);
 });
 
+test('each picker load refetches the template catalog and a create uses the latest one', async t => {
+  // Fetch 1 fails, fetch 2 lists one skill, later fetches list two.
+  let fetches = 0;
+  const seen = [];
+  const server = await createApp({
+    adapter: { account: async () => ({ connected: true, login: 'fixture' }) },
+    catalog: async () => { fetches++; if (fetches === 1) throw new Error('offline'); return { groups: [], skills: fetches === 2 ? [{ name: 'init-project' }] : [{ name: 'init-project' }, { name: 'late-review' }] }; },
+    create: async ({ name, catalog, disabledSkills }) => { seen.push(catalog.skills.map(skill => skill.name)); return { destination: `C:/CoreWise/${name}`, remoteUrl: '', disabledSkills }; },
+    preferences: 'nonexistent-fixture-preferences',
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const json = async (route, body) => { const response = await fetch(`${origin}${route}`, body === undefined ? {} : { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', 'X-CoreWise-Token': token }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() }; };
+  const { token } = (await json('/api/status')).body;
+  const settle = async () => { for (let i = 0; i < 50 && (await json('/api/job')).body.job?.status === 'running'; i++) await new Promise(resolve => setTimeout(resolve, 10)); };
+  assert.equal((await json('/api/skills')).status, 502);
+  // The failed fetch is not cached: a create fetches its own list.
+  assert.equal((await json('/api/create', { name: 'first' })).status, 202);
+  await settle();
+  assert.deepEqual(seen, [['init-project']]);
+  // A create reuses the list the last picker load fetched; the next picker load fetches again.
+  assert.equal((await json('/api/create', { name: 'second' })).status, 202);
+  await settle();
+  assert.deepEqual((await json('/api/skills')).body.skills.map(skill => skill.name), ['init-project', 'late-review']);
+  assert.equal((await json('/api/create', { name: 'third' })).status, 202);
+  await settle();
+  assert.deepEqual(seen, [['init-project'], ['init-project'], ['init-project', 'late-review']]);
+  assert.equal(fetches, 3);
+});
+
 test('local and update routes validate the repository and run the update job', async t => {
   const updated = [];
   const server = await createApp({
