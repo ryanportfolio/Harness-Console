@@ -69,15 +69,18 @@ const skipReason = (skip, id) => skip.find(item => item.repo.toLowerCase() === i
 
 // What GitHub says about a repository before a sync writes to it. Archived: skipped. A failed or
 // unclear answer blocks the repository rather than treating it as writable. The pull request goes
-// to the name GitHub reports, which follows a rename the clone's origin may still use.
+// to the name GitHub reports, which follows a rename the clone's origin may still use. The name is
+// returned whenever GitHub gave one, so the skip list can match it even when the repository is
+// archived or blocked.
 async function githubState(id, execute) {
   let info;
   try { info = JSON.parse(await execute('gh', ['api', `repos/${id}`, '--jq', '{archived: .archived, name: .full_name, branch: .default_branch}'])); }
   catch (error) { return { blocked: `Could not check the repository on GitHub, so it cannot be synced. ${reason(error)}` }; }
-  if (info?.archived === true) return { skipped: 'Archived on GitHub' };
-  if (info?.archived !== false || typeof info.name !== 'string') return { blocked: 'GitHub did not say whether the repository is archived, so it cannot be synced.' };
-  if (info.branch !== 'main') return { blocked: `Its default branch on GitHub is ${info.branch}, not main; sync it by hand.` };
-  return { name: info.name, branch: info.branch };
+  const name = typeof info?.name === 'string' ? info.name : undefined;
+  if (info?.archived === true) return { skipped: 'Archived on GitHub', name };
+  if (info?.archived !== false || !name) return { blocked: 'GitHub did not say whether the repository is archived, so it cannot be synced.' };
+  if (info.branch !== 'main') return { blocked: `Its default branch on GitHub is ${info.branch}, not main; sync it by hand.`, name };
+  return { name, branch: info.branch };
 }
 
 // `git ls-tree -z` rows: "<mode> <type> <sha>\t<path>".
@@ -281,8 +284,11 @@ async function limit(items, size, work) {
 }
 
 // Fetches each clone's origin/main (the working folder itself is never touched) and compares it.
-// A skip-listed clone is not fetched; a Harness clone is then looked up on GitHub, and an archived
-// one is listed as skipped. Skipped and failed repositories carry no skills, so none can be picked.
+// A skip-listed clone is not fetched. Every other clone is looked up on GitHub before the fetch, so
+// one whose origin uses a name from before a rename matches a skip entry under the current name and
+// is not fetched either. Whether a clone is a Harness clone needs the fetched tree, so an archived
+// repository or a failed lookup is reported only for a Harness clone; other clones stay unlisted.
+// Skipped and failed repositories carry no skills, so none can be picked.
 export async function scanSkills({ root, execute = run, template: opened, cache, source, skip } = {}) {
   const skipList = skip ?? await readSkipList();
   const template = opened ?? await openTemplate({ cache, source, execute });
@@ -290,6 +296,9 @@ export async function scanSkills({ root, execute = run, template: opened, cache,
   const repos = await limit(clones, 6, async clone => {
     const listed = skipReason(skipList, clone.id);
     if (listed) return { ...clone, harness: true, skipped: listed };
+    const github = await githubState(clone.id, execute);
+    const renamed = github.name && skipReason(skipList, github.name);
+    if (renamed) return { ...clone, harness: true, skipped: renamed };
     let repo;
     try {
       await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
@@ -298,10 +307,7 @@ export async function scanSkills({ root, execute = run, template: opened, cache,
       repo = { ...clone, head, ...await compareRepo({ template, folder: clone.folder, execute }), worktrees };
     } catch (error) { return { ...clone, harness: true, error: `Could not fetch. ${reason(error)}` }; }
     if (!repo.harness) return repo;
-    const github = await githubState(clone.id, execute);
-    // An origin with a name from before a rename misses a skip entry under the current name.
-    const skipped = github.skipped ?? (github.name && skipReason(skipList, github.name));
-    return skipped ? { ...clone, harness: true, skipped } : github.blocked ? { ...clone, harness: true, error: github.blocked } : repo;
+    return github.skipped ? { ...clone, harness: true, skipped: github.skipped } : github.blocked ? { ...clone, harness: true, error: github.blocked } : repo;
   });
   return { template: { id: TEMPLATE, head: template.head }, repos: repos.filter(repo => repo.harness).map(({ harness, nativeCopies, ...repo }) => repo) };
 }
@@ -489,11 +495,11 @@ function removedSummary(result) {
 async function applyRepo({ template, clone, skipList, apply, remove, replace, execute, onOutput }) {
   const say = text => onOutput(`${clone.id}: ${text}\n`);
   const github = await githubState(clone.id, execute);
+  // The skip list also matches the name GitHub reports, which follows a rename the origin may still use.
+  const listed = github.name && skipReason(skipList, github.name);
+  if (listed) throw new Error(`Skipped: ${listed}. Nothing was written.`);
   if (github.skipped) throw new Error(`Skipped: ${github.skipped}. Nothing was written.`);
   if (github.blocked) throw new Error(github.blocked);
-  // The skip list also matches the name GitHub reports, which follows a rename the origin may still use.
-  const listed = skipReason(skipList, github.name);
-  if (listed) throw new Error(`Skipped: ${listed}. Nothing was written.`);
   await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
   const head = (await execute('git', ['-C', clone.folder, 'rev-parse', 'origin/main'])).trim();
   const { skills, nativeCopies } = await compareRepo({ template, folder: clone.folder, rev: head, execute });

@@ -20,11 +20,13 @@ const commit = async (dir, message) => { await run('git', ['-C', dir, 'add', '-A
 const json = value => `${JSON.stringify(value, null, 2)}\n`;
 
 // Stands in for gh: records every call, answers the repository lookup and pull request creation, and
-// fails on anything else. Git pushes are recorded too, so a test can prove none targets main.
+// fails on anything else. Git pushes and fetches are recorded too, so a test can prove none targets
+// main and a skipped clone is never fetched.
 function fakeGitHub() {
-  const gh = { calls: [], pushes: [], archived: false, fail: null, prFail: null, name: 'owner/project', branch: 'main', pr: 'https://github.com/owner/project/pull/7' };
+  const gh = { calls: [], pushes: [], fetches: [], archived: false, fail: null, prFail: null, name: 'owner/project', branch: 'main', pr: 'https://github.com/owner/project/pull/7' };
   gh.execute = async (command, args, options) => {
     if (command === 'git' && args.includes('push')) gh.pushes.push(args);
+    if (command === 'git' && args.includes('fetch')) gh.fetches.push(args);
     if (command !== 'gh') return run(command, args, options);
     gh.calls.push(args);
     if (gh.fail) throw new Error(gh.fail);
@@ -278,20 +280,62 @@ test('the skip list also matches the current GitHub name of a repository renamed
   data.gh.name = 'owner/renamed';
   const skip = [{ repo: 'Owner/Renamed', reason: 'Frozen job take-home' }];
 
-  const [repo] = (await scanSkills({ root: data.root, execute: data.execute, template, skip })).repos;
+  const fetched = () => data.gh.fetches.filter(args => args.includes(data.folder));
+  const scan = async () => (await scanSkills({ root: data.root, execute: data.execute, template, skip })).repos;
+  const attempt = () => applySkills({ root: data.root, execute: data.execute, template, skip, selection: [{ id: 'owner/project', apply: ['alpha'] }] }).catch(error => error);
+
+  // The scan asks GitHub first and never fetches the clone, so a failed fetch cannot hide the skip.
+  const [repo] = await scan();
   assert.equal(repo.id, 'owner/project');
   assert.equal(repo.skipped, 'Frozen job take-home'); assert.equal(repo.skills, undefined);
+  assert.deepEqual(data.gh.calls.map(args => args.slice(0, 2)), [['api', 'repos/owner/project']]);
+  assert.deepEqual(fetched(), []);
 
   data.gh.calls.length = 0;
-  const failure = await applySkills({ root: data.root, execute: data.execute, template, skip, selection: [{ id: 'owner/project', apply: ['alpha'] }] }).catch(error => error);
+  const failure = await attempt();
   assert.equal(failure.results[0].result, 'failed');
   assert.equal(failure.results[0].error, 'Skipped: Frozen job take-home. Nothing was written.');
-  // Only the repository lookup reached gh: no push, no sync branch, no pull request, main unchanged.
+  // Only the repository lookup reached gh: no fetch, no push, no sync branch, no pull request, main unchanged.
   assert.deepEqual(data.gh.calls.map(args => args.slice(0, 2)), [['api', 'repos/owner/project']]);
+  assert.deepEqual(fetched(), []);
   assert.deepEqual(data.gh.pushes, []); assert.deepEqual(prCalls(data), []);
+
+  // The skip list still names the reason when GitHub also reports the repository archived or on another default branch.
+  for (const state of [{ archived: true }, { branch: 'trunk' }]) {
+    Object.assign(data.gh, { archived: false, branch: 'main' }, state);
+    assert.equal((await scan())[0].skipped, 'Frozen job take-home');
+    assert.equal((await attempt()).results[0].error, 'Skipped: Frozen job take-home. Nothing was written.');
+    assert.deepEqual(fetched(), []);
+  }
   assert.deepEqual(await syncBranches(data), []);
   assert.equal(await revOf(data, 'main'), main);
   assert.equal((await run('git', ['-C', data.folder, 'worktree', 'list', '--porcelain'])).match(/^worktree /gm).length, 1);
+});
+
+test('a clone that is not a Harness clone stays unlisted when its GitHub lookup fails or reports it archived', async t => {
+  const data = await fixture(t);
+  const seed = path.join(data.temp, 'plain-seed'); await run('git', ['init', '-q', '-b', 'main', seed]);
+  await put(seed, 'README.md', 'not a Harness project\n'); await commit(seed, 'plain');
+  const remote = path.join(data.temp, 'plain.git'); await run('git', ['clone', '-q', '--bare', seed, remote]);
+  const folder = path.join(data.root, 'plain'); await run('git', ['clone', '-q', remote, folder]);
+  await run('git', ['-C', folder, 'remote', 'set-url', 'origin', 'https://github.com/owner/plain.git']);
+  await run('git', ['-C', folder, 'config', `url.${remote.replaceAll('\\', '/')}.insteadOf`, 'https://github.com/owner/plain.git']);
+  // GitHub answers for owner/plain here; owner/project still goes to the fixture's stub.
+  let plain = null; const looked = [];
+  const execute = async (command, args, options) => {
+    if (command !== 'gh' || args[1] !== 'repos/owner/plain') return data.execute(command, args, options);
+    looked.push(args);
+    if (plain === 'fail') throw new Error('HTTP 502: Bad Gateway');
+    return `${JSON.stringify({ archived: plain === 'archived', name: 'owner/plain', branch: plain === 'trunk' ? 'trunk' : 'main' })}\n`;
+  };
+  const template = await data.opened();
+  for (const state of ['fail', 'archived', 'trunk']) {
+    plain = state; looked.length = 0;
+    const { repos } = await scanSkills({ root: data.root, execute, template, skip: [] });
+    assert.deepEqual(repos.map(repo => repo.id), ['owner/project'], state);
+    assert.equal(repos[0].error, undefined); assert.equal(repos[0].skipped, undefined); assert.ok(repos[0].skills.length);
+    assert.equal(looked.length, 1, state);
+  }
 });
 
 test('a pull request that cannot be opened names the pushed branch', async t => {
