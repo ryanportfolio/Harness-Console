@@ -121,6 +121,32 @@ test('sync route pins a replacement to the scanned trees and refuses skills that
   assert.deepEqual(synced, [[{ id: 'owner/project', apply: [], remove: [], replace: [{ name: 'beta', trees: 't1:-' }] }]]);
 });
 
+test('sync route refuses a repository the scan skipped or could not check', async t => {
+  const synced = [];
+  const server = await createApp({
+    adapter: { account: async () => ({ connected: true, login: 'fixture' }) },
+    scan: async () => ({ template: { head: 'abc' }, repos: [
+      { id: 'owner/frozen', name: 'frozen', skipped: 'Frozen job take-home' },
+      { id: 'owner/old', name: 'old', skipped: 'Archived on GitHub' },
+      { id: 'owner/unknown', name: 'unknown', error: 'Could not check the repository on GitHub, so it cannot be synced. HTTP 502' },
+      { id: 'owner/project', name: 'project', skills: [{ name: 'alpha', status: 'behind' }] },
+    ] }),
+    sync: async ({ selection }) => { synced.push(selection); return []; },
+    preferences: 'nonexistent-fixture-preferences',
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const json = async (route, body) => { const response = await fetch(`${origin}${route}`, body === undefined ? {} : { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', 'X-CoreWise-Token': token }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() }; };
+  const { token } = (await json('/api/status')).body;
+  await json('/api/sync');
+  for (const [id, message] of [['owner/frozen', /Skipped: Frozen job take-home/], ['owner/old', /Skipped: Archived on GitHub/], ['owner/unknown', /Could not check the repository on GitHub/]]) {
+    const refused = await json('/api/sync', { repos: [{ id, apply: ['alpha'] }, { id: 'owner/project', apply: ['alpha'] }] });
+    assert.equal(refused.status, 400); assert.match(refused.body.error, message);
+  }
+  assert.deepEqual(synced, []);
+});
+
 test('sync compare route reads only a scanned repository and skill at the scanned commits', async t => {
   const compared = [];
   const server = await createApp({

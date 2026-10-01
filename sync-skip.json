@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "skip": [
+    { "repo": "ryanportfolio/threejs-interview-test", "reason": "Frozen job take-home" },
+    { "repo": "ryanportfolio/cx-lab", "reason": "No firmware files" }
+  ]
+}

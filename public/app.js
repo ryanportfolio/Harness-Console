@@ -231,9 +231,9 @@ $('skillPicker').addEventListener('keydown', event => { if (event.key === 'Escap
 $('skillPickerClose').onclick = closeSkillPicker; $('skillsDone').onclick = closeSkillPicker;
 $('skillsEnableAll').onclick = () => setOptionalSkills(true); $('skillsClearOptional').onclick = () => setOptionalSkills(false);
 
-// Skill sync: compare every Harness clone with the template, then push chosen skills to each main.
+// Skill sync: compare every Harness clone with the template, then open a pull request per repository with the chosen skills.
 const sync = { scanned: false, scanning: false, data: null, armed: false };
-// The third field marks groups with checkboxes; every box starts unchecked so a push takes only what was picked.
+// The third field marks groups with checkboxes; every box starts unchecked so a sync takes only what was picked.
 // Codex-only skills (an .agents copy and no Claude copy) get their own row for updates and additions.
 const hasStatus = (status, codex) => skill => skill.status === status && (codex === undefined || Boolean(skill.codex) === codex);
 const SYNC_GROUPS = [
@@ -452,14 +452,16 @@ function syncRepoBlock(repo) {
 }
 function renderSync() {
   const repos = sync.data.repos;
-  const actionable = repos.filter(repo => !repo.error && repo.skills.some(skill => ['behind', 'new', 'removed', 'customized'].includes(skill.status)));
+  const actionable = repos.filter(repo => !repo.error && !repo.skipped && repo.skills.some(skill => ['behind', 'new', 'removed', 'customized'].includes(skill.status)));
   // A repository whose only differences are local edits still gets a block, so those edits stay visible.
-  const shown = repos.filter(repo => !repo.error && (repo.worktrees?.length || repo.skills.some(skill => !['same', 'off'].includes(skill.status))));
-  const current = repos.filter(repo => !repo.error && !shown.includes(repo));
+  const shown = repos.filter(repo => !repo.error && !repo.skipped && (repo.worktrees?.length || repo.skills.some(skill => !['same', 'off'].includes(skill.status))));
+  const current = repos.filter(repo => !repo.error && !repo.skipped && !shown.includes(repo));
   const blocks = shown.map(syncRepoBlock);
   const line = (label, text) => { const p = document.createElement('p'); p.className = 'sync-current'; const span = document.createElement('span'); span.textContent = label; p.append(span, text); return p; };
   if (current.length) blocks.push(line('Nothing to sync: ', current.map(repo => repo.name).join(', ')));
-  for (const repo of repos.filter(repo => repo.error)) blocks.push(line(`${repo.name}: `, `could not fetch. ${repo.error}`));
+  // Skipped and blocked repositories carry no skills, so nothing in them can be picked.
+  for (const repo of repos.filter(repo => repo.skipped)) blocks.push(line(`${repo.name}: `, `skipped, never synced. ${repo.skipped}.`));
+  for (const repo of repos.filter(repo => repo.error)) blocks.push(line(`${repo.name}: `, repo.error));
   if (!repos.length) blocks.push(line('', 'No Harness repositories are cloned in your CoreWise folder.'));
   $('syncRepos').replaceChildren(...blocks);
   for (const repo of actionable) syncRepoToggle(repo.id);
@@ -488,7 +490,7 @@ function renderSyncFoot() {
   $('syncSummary').textContent = !selection.length ? 'Nothing selected' : `${picked}, across ${count(selection.length, 'repository', 'repositories')}${replacements ? '. Replaced skills lose the edits made in their repository.' : ''}`;
   $('syncSelectAll').disabled = $('syncClearAll').disabled = busy || sync.scanning;
   $('syncApply').disabled = busy || sync.scanning || !selection.length;
-  $('syncApply').firstChild.textContent = sync.armed ? `Confirm push to ${count(selection.length, 'main branch', 'main branches')} ` : 'Push to main ';
+  $('syncApply').firstChild.textContent = sync.armed ? `Confirm ${count(selection.length, 'pull request', 'pull requests')} ` : 'Open pull requests ';
   for (const input of $('syncRepos').querySelectorAll('input')) input.disabled = busy;
 }
 async function applySync() {
@@ -503,6 +505,10 @@ function renderSyncJob(job) {
   $('syncActivityTitle').textContent = job.status === 'running' ? 'Syncing skills' : job.status === 'complete' ? 'Skills synced' : 'Sync needs attention';
   $('syncJobState').textContent = job.status === 'running' ? 'In progress' : job.status === 'complete' ? 'Complete' : 'Failed';
   $('syncLog').textContent = job.log || 'Starting…'; $('syncLog').scrollTop = $('syncLog').scrollHeight;
+  // Links only to GitHub pull request pages, the one kind of url sync.mjs returns.
+  const prs = (job.results ?? []).filter(item => /^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+$/.test(item.url ?? ''));
+  $('syncLinks').replaceChildren(...prs.map(item => { const a = el('a', '', `${item.id}: pull request from ${item.branch}`); a.href = item.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; return el('li', '', a); }));
+  $('syncLinks').hidden = !prs.length;
   $('syncScan').disabled = busy || sync.scanning; renderSyncFoot();
   if (job.status !== 'running' && lastJobStatus === 'running') void scanSync();
 }

@@ -68,3 +68,4 @@
 .compare-raw{margin-top:10px;font-size:14px}.compare-raw summary{cursor:pointer;color:var(--bronze)}
 .compare-raw pre{font:12px/1.5 Consolas,"Cascadia Mono",ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0}
 @media(max-width:760px){.compare-cards{grid-template-columns:1fr}.compare-arrow{flex-direction:row;gap:8px}}
+.sync-links{margin:14px 0 0;padding-left:20px;font-size:15px;line-height:1.8}.sync-links a{color:inherit}
