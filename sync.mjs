@@ -299,7 +299,9 @@ export async function scanSkills({ root, execute = run, template: opened, cache,
     } catch (error) { return { ...clone, harness: true, error: `Could not fetch. ${reason(error)}` }; }
     if (!repo.harness) return repo;
     const github = await githubState(clone.id, execute);
-    return github.skipped ? { ...clone, harness: true, skipped: github.skipped } : github.blocked ? { ...clone, harness: true, error: github.blocked } : repo;
+    // An origin with a name from before a rename misses a skip entry under the current name.
+    const skipped = github.skipped ?? (github.name && skipReason(skipList, github.name));
+    return skipped ? { ...clone, harness: true, skipped } : github.blocked ? { ...clone, harness: true, error: github.blocked } : repo;
   });
   return { template: { id: TEMPLATE, head: template.head }, repos: repos.filter(repo => repo.harness).map(({ harness, nativeCopies, ...repo }) => repo) };
 }
@@ -484,11 +486,14 @@ function removedSummary(result) {
 
 // Applies one repository's selection in a temporary worktree on origin/main, pushes it to a new
 // branch and opens a pull request into main. Main itself is never pushed to.
-async function applyRepo({ template, clone, apply, remove, replace, execute, onOutput }) {
+async function applyRepo({ template, clone, skipList, apply, remove, replace, execute, onOutput }) {
   const say = text => onOutput(`${clone.id}: ${text}\n`);
   const github = await githubState(clone.id, execute);
   if (github.skipped) throw new Error(`Skipped: ${github.skipped}. Nothing was written.`);
   if (github.blocked) throw new Error(github.blocked);
+  // The skip list also matches the name GitHub reports, which follows a rename the origin may still use.
+  const listed = skipReason(skipList, github.name);
+  if (listed) throw new Error(`Skipped: ${listed}. Nothing was written.`);
   await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
   const head = (await execute('git', ['-C', clone.folder, 'rev-parse', 'origin/main'])).trim();
   const { skills, nativeCopies } = await compareRepo({ template, folder: clone.folder, rev: head, execute });
@@ -604,7 +609,7 @@ export async function applySkills({ root, selection, execute = run, template: op
     const clone = clones.get(id), listed = skipReason(skipList, id);
     if (!clone) { results.push({ id, result: 'failed', error: 'No clone in the CoreWise folder.' }); onOutput(`${id}: no clone in the CoreWise folder\n`); continue; }
     if (listed) { results.push({ id, result: 'failed', error: `Skipped: ${listed}.` }); onOutput(`${id}: skipped, ${listed}; nothing written\n`); continue; }
-    try { results.push(await applyRepo({ template, clone, apply, remove, replace, execute, onOutput })); }
+    try { results.push(await applyRepo({ template, clone, skipList, apply, remove, replace, execute, onOutput })); }
     catch (error) { const message = reason(error); results.push({ id, result: 'failed', error: message, ...(error.branch && { branch: error.branch }) }); onOutput(`${id}: failed${error.branch ? '' : ', nothing pushed'}. ${message}\n`); }
   }
   const failed = results.filter(result => result.result === 'failed');

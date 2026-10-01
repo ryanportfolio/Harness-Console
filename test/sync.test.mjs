@@ -270,6 +270,30 @@ test('skip-listed, archived and unverifiable repositories are listed with the re
   assert.equal((await run('git', ['-C', data.folder, 'worktree', 'list', '--porcelain'])).match(/^worktree /gm).length, 1);
 });
 
+test('the skip list also matches the current GitHub name of a repository renamed since it was cloned', async t => {
+  const data = await fixture(t);
+  const template = await data.opened();
+  const main = await revOf(data, 'main');
+  // The origin still says owner/project; GitHub reports the repository under its new name.
+  data.gh.name = 'owner/renamed';
+  const skip = [{ repo: 'Owner/Renamed', reason: 'Frozen job take-home' }];
+
+  const [repo] = (await scanSkills({ root: data.root, execute: data.execute, template, skip })).repos;
+  assert.equal(repo.id, 'owner/project');
+  assert.equal(repo.skipped, 'Frozen job take-home'); assert.equal(repo.skills, undefined);
+
+  data.gh.calls.length = 0;
+  const failure = await applySkills({ root: data.root, execute: data.execute, template, skip, selection: [{ id: 'owner/project', apply: ['alpha'] }] }).catch(error => error);
+  assert.equal(failure.results[0].result, 'failed');
+  assert.equal(failure.results[0].error, 'Skipped: Frozen job take-home. Nothing was written.');
+  // Only the repository lookup reached gh: no push, no sync branch, no pull request, main unchanged.
+  assert.deepEqual(data.gh.calls.map(args => args.slice(0, 2)), [['api', 'repos/owner/project']]);
+  assert.deepEqual(data.gh.pushes, []); assert.deepEqual(prCalls(data), []);
+  assert.deepEqual(await syncBranches(data), []);
+  assert.equal(await revOf(data, 'main'), main);
+  assert.equal((await run('git', ['-C', data.folder, 'worktree', 'list', '--porcelain'])).match(/^worktree /gm).length, 1);
+});
+
 test('a pull request that cannot be opened names the pushed branch', async t => {
   const data = await fixture(t);
   data.gh.prFail = 'GraphQL: Resource not accessible by integration';
