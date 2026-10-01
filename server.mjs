@@ -22,8 +22,11 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
   const dshView = preview => ({ ...preview, skills: preview.skills.map(({ rendered, ...skill }) => skill) });
   try { lastSelected = JSON.parse(await readFile(preferences, 'utf8')).lastSelected || null; } catch {}
   const reply = (res, code, data) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); };
-  // The template's skill list is fetched once per server run and refetched only after a failure.
-  const loadSkills = () => { skills ??= catalog().catch(error => { skills = null; throw error; }); return skills; };
+  // The template's skill list is refetched each time a page loads the picker, so a create checks the
+  // list the most recent page load showed. A create with no list yet fetches one; a failed fetch is
+  // not kept. createProject also checks the clone's own manifest, so an old list cannot skip a rule.
+  const fetchSkills = () => { const pending = catalog(); skills = pending; pending.catch(() => { if (skills === pending) skills = null; }); return pending; };
+  const loadSkills = () => skills ?? fetchSkills();
   const server = http.createServer(async (req, res) => {
     const origin = `http://127.0.0.1:${server.address().port}`;
     res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src http://127.0.0.1:${TRACKER.port}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`);
@@ -47,7 +50,7 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
       if (req.method === 'GET' && url.pathname === '/api/status') return reply(res, 200, { ...await adapter.account(), root, token, lastSelected, build });
       if (req.method === 'GET' && url.pathname === '/api/repos') { repos = await adapter.repositories(); return reply(res, 200, { repos }); }
       if (req.method === 'GET' && url.pathname === '/api/skills') {
-        try { return reply(res, 200, await loadSkills()); }
+        try { return reply(res, 200, await fetchSkills()); }
         catch (error) { return reply(res, 502, { error: `Could not read the template's skills. ${error.message}` }); }
       }
       if (req.method === 'GET' && url.pathname === '/api/sync') {
