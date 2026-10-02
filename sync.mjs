@@ -263,6 +263,10 @@ export async function staleWorktrees({ template, folder, rev = 'origin/main', ex
   const entries = (await git(['worktree', 'list', '--porcelain']).catch(() => '')).split(/\r?\n\r?\n/).map(block => Object.fromEntries(block.split(/\r?\n/).filter(Boolean).map(line => {
     const at = line.indexOf(' '); return at < 0 ? [line, true] : [line.slice(0, at), line.slice(at + 1)];
   })));
+  // Git prints each checkout's real path, so a root reached through a junction or an 8.3 short name
+  // has to be resolved the same way before the clone's own checkout can be recognized.
+  const long = async where => (await realpath(where).catch(() => path.resolve(where))).toLowerCase();
+  const self = await long(folder);
   const found = [];
   for (const entry of entries) {
     if (!entry.worktree || !entry.HEAD || entry.bare || entry.prunable || !await exists(entry.worktree)) continue;
@@ -276,7 +280,7 @@ export async function staleWorktrees({ template, folder, rev = 'origin/main', ex
     }
     if (!skills.size) continue;
     const where = path.resolve(entry.worktree);
-    found.push({ path: where, own: where.toLowerCase() === path.resolve(folder).toLowerCase(), branch: entry.branch ? entry.branch.replace(/^refs\/heads\//, '') : null, head: entry.HEAD.slice(0, 7), skills: [...skills].sort() });
+    found.push({ path: where, own: await long(where) === self, branch: entry.branch ? entry.branch.replace(/^refs\/heads\//, '') : null, head: entry.HEAD.slice(0, 7), skills: [...skills].sort() });
   }
   return found;
 }

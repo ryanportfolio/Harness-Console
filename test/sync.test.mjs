@@ -1,7 +1,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { run } from '../core.mjs';
@@ -41,7 +41,9 @@ function fakeGitHub() {
 // Target: alpha at the old version, beta edited locally, gamma untouched, epsilon turned off,
 // plus a local-only skill and an uncommitted edit in the working folder.
 async function fixture(t, { targetScript, noModes, targetModes, overrides = { epsilon: 'off' }, extra = {} } = {}) {
-  const temp = await mkdtemp(path.join(tmpdir(), 'corewise-sync-'));
+  // The long real path, the form `git worktree list` prints; tmpdir() can be an 8.3 short name
+  // (the CI runner) or a junction.
+  const temp = await realpath(await mkdtemp(path.join(tmpdir(), 'corewise-sync-')));
   t.after(() => rm(temp, { recursive: true, force: true }));
   const template = path.join(temp, 'template'); await run('git', ['init', '-q', '-b', 'main', template]);
   const v1 = {
