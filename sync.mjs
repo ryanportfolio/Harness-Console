@@ -63,9 +63,13 @@ export async function readSkipList(file = SKIP_FILE) {
   if (data?.version !== 1 || !Array.isArray(data.skip) || data.skip.some(item => typeof item?.repo !== 'string' || typeof item.reason !== 'string')) {
     throw new Error(`${path.basename(file)}: expected {"version": 1, "skip": [{"repo": "owner/name", "reason": "..."}]}`);
   }
+  const blank = data.skip.find(item => !item.reason.trim());
+  if (blank) throw new Error(`${path.basename(file)}: the entry for ${JSON.stringify(blank.repo)} has an empty reason; say why the repository is never synced`);
   return data.skip;
 }
-const skipReason = (skip, id) => skip.find(item => item.repo.toLowerCase() === id.toLowerCase())?.reason ?? null;
+// null when the repository is not listed. Callers test for null, not for an empty reason, so a
+// listed repository stays skipped whatever its reason says.
+export const skipReason = (skip, id) => { const item = skip.find(entry => entry.repo.toLowerCase() === id.toLowerCase()); return item ? item.reason : null; };
 
 // What GitHub says about a repository before a sync writes to it. Archived: skipped. A failed or
 // unclear answer blocks the repository rather than treating it as writable. The pull request goes
@@ -295,10 +299,10 @@ export async function scanSkills({ root, execute = run, template: opened, cache,
   const clones = await findClones({ root, execute });
   const repos = await limit(clones, 6, async clone => {
     const listed = skipReason(skipList, clone.id);
-    if (listed) return { ...clone, harness: true, skipped: listed };
+    if (listed !== null) return { ...clone, harness: true, skipped: listed };
     const github = await githubState(clone.id, execute);
-    const renamed = github.name && skipReason(skipList, github.name);
-    if (renamed) return { ...clone, harness: true, skipped: renamed };
+    const renamed = github.name ? skipReason(skipList, github.name) : null;
+    if (renamed !== null) return { ...clone, harness: true, skipped: renamed };
     let repo;
     try {
       await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
@@ -496,8 +500,8 @@ async function applyRepo({ template, clone, skipList, apply, remove, replace, ex
   const say = text => onOutput(`${clone.id}: ${text}\n`);
   const github = await githubState(clone.id, execute);
   // The skip list also matches the name GitHub reports, which follows a rename the origin may still use.
-  const listed = github.name && skipReason(skipList, github.name);
-  if (listed) throw new Error(`Skipped: ${listed}. Nothing was written.`);
+  const listed = github.name ? skipReason(skipList, github.name) : null;
+  if (listed !== null) throw new Error(`Skipped: ${listed}. Nothing was written.`);
   if (github.skipped) throw new Error(`Skipped: ${github.skipped}. Nothing was written.`);
   if (github.blocked) throw new Error(github.blocked);
   await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
@@ -614,7 +618,7 @@ export async function applySkills({ root, selection, execute = run, template: op
   for (const { id, apply = [], remove = [], replace = [] } of selection) {
     const clone = clones.get(id), listed = skipReason(skipList, id);
     if (!clone) { results.push({ id, result: 'failed', error: 'No clone in the CoreWise folder.' }); onOutput(`${id}: no clone in the CoreWise folder\n`); continue; }
-    if (listed) { results.push({ id, result: 'failed', error: `Skipped: ${listed}.` }); onOutput(`${id}: skipped, ${listed}; nothing written\n`); continue; }
+    if (listed !== null) { results.push({ id, result: 'failed', error: `Skipped: ${listed}.` }); onOutput(`${id}: skipped, ${listed}; nothing written\n`); continue; }
     try { results.push(await applyRepo({ template, clone, skipList, apply, remove, replace, execute, onOutput })); }
     catch (error) { const message = reason(error); results.push({ id, result: 'failed', error: message, ...(error.branch && { branch: error.branch }) }); onOutput(`${id}: failed${error.branch ? '' : ', nothing pushed'}. ${message}\n`); }
   }

@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { run } from '../core.mjs';
-import { applySkills, compareSkill, githubId, normalizeSelection, openTemplate, readSkipList, scanSkills, skillStory, staleWorktrees } from '../sync.mjs';
+import { applySkills, compareSkill, githubId, normalizeSelection, openTemplate, readSkipList, scanSkills, skillStory, skipReason, staleWorktrees } from '../sync.mjs';
 
 // No test reaches GitHub. Every sync call gets the fixture's execute, which answers gh itself, and git
 // remotes are rewritten to local bare repositories. As a backstop, gh runs with an empty config and no
@@ -356,6 +356,39 @@ test('the committed skip list names the frozen repositories', async () => {
   const skip = await readSkipList();
   assert.deepEqual(skip.map(item => item.repo).sort(), ['ryanportfolio/cx-lab', 'ryanportfolio/threejs-interview-test']);
   assert.ok(skip.every(item => item.reason.trim()));
+});
+
+test('a skip list entry with an empty or blank reason stops the sync when the list is read', async t => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'corewise-skip-'));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  for (const [name, reason] of [['empty', ''], ['blank', ' \t ']]) {
+    const file = path.join(temp, `${name}.json`);
+    await writeFile(file, json({ version: 1, skip: [{ repo: 'owner/kept', reason: 'Frozen job take-home' }, { repo: 'owner/frozen', reason }] }));
+    await assert.rejects(readSkipList(file), { message: `${name}.json: the entry for "owner/frozen" has an empty reason; say why the repository is never synced` }, name);
+  }
+});
+
+test('a listed repository is skipped whatever its reason says', async t => {
+  // The lookup tells "not listed" (null) apart from any reason, an empty one included.
+  assert.equal(skipReason([{ repo: 'Owner/Project', reason: '' }], 'owner/project'), '');
+  assert.equal(skipReason([{ repo: 'Owner/Project', reason: '' }], 'owner/other'), null);
+
+  // A list handed in directly skips validation, so an empty reason must still keep the clone untouched.
+  const data = await fixture(t);
+  const template = await data.opened();
+  const main = await revOf(data, 'main');
+  const fetched = () => data.gh.fetches.filter(args => args.includes(data.folder));
+  for (const skip of [[{ repo: 'owner/project', reason: '' }], [{ repo: 'owner/renamed', reason: '' }]]) {
+    data.gh.name = skip[0].repo;
+    const [repo] = (await scanSkills({ root: data.root, execute: data.execute, template, skip })).repos;
+    assert.equal(repo.skipped, ''); assert.equal(repo.skills, undefined);
+    const failure = await applySkills({ root: data.root, execute: data.execute, template, skip, selection: [{ id: 'owner/project', apply: ['alpha'] }] }).catch(error => error);
+    assert.equal(failure.results[0].result, 'failed');
+  }
+  assert.deepEqual(fetched(), []);
+  assert.deepEqual(data.gh.pushes, []); assert.deepEqual(prCalls(data), []);
+  assert.deepEqual(await syncBranches(data), []);
+  assert.equal(await revOf(data, 'main'), main);
 });
 
 // Same hash as the template's sync-codex-skills.mjs: "<path>\0<length>\0<bytes>" per file in sorted
