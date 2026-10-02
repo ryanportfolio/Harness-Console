@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { cloneMain, localState, run, sameRemote, updateMain, validateRepo, github } from '../core.mjs';
 
 async function fixture(t, branch = 'main') {
-  const temp = await mkdtemp(path.join(tmpdir(), 'corewise-'));
+  // The long real path: tmpdir() can be an 8.3 short name (the CI runner) or a junction, while git and
+  // realpath report the long form, so paths built from the alias would not compare equal.
+  const temp = await realpath(await mkdtemp(path.join(tmpdir(), 'corewise-')));
   t.after(() => rm(temp, { recursive: true, force: true }));
   const source = path.join(temp, 'source'); await mkdir(source);
   await run('git', ['init', '-b', branch, source]);

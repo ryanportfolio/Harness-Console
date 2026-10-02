@@ -1,0 +1,23 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  node-test:
+    # The app targets Windows (the launcher uses netstat, PowerShell and rundll32), so the tests run there.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # Skill sync tests commit in temporary worktrees with the user's Git identity.
+      - name: Git identity for test commits
+        run: |
+          git config --global user.name "Harness Console CI"
+          git config --global user.email "ci@example.invalid"
+      # DSH tests skip themselves when DSH is not installed, which it is not on the runner.
+      # Every gh call is stubbed in the tests; no token is passed to this step.
+      - name: Tests
+        run: node --test test/*.test.mjs

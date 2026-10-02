@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, realpath, rm, access } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { run } from '../core.mjs';
@@ -41,7 +41,9 @@ const catalog = {
 // and the push at the end lands in the same bare repository so the remote side is observable.
 // `manifest` is the template's manifest text; null leaves the file out.
 async function fixture(t, { manifest = manifestText(), extra = {} } = {}) {
-  const temp = await mkdtemp(path.join(tmpdir(), 'corewise-harness-'));
+  // The long real path, the form createProject returns after resolving root; tmpdir() can be an
+  // 8.3 short name (the CI runner) or a junction.
+  const temp = await realpath(await mkdtemp(path.join(tmpdir(), 'corewise-harness-')));
   t.after(() => rm(temp, { recursive: true, force: true }));
   const work = path.join(temp, 'template'); await mkdir(work);
   const files = {

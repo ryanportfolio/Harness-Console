@@ -105,9 +105,11 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
       if (kind === 'sync') {
         request = normalizeSelection(body.repos);
         if (request.some(item => !lastScan?.repos.some(repo => repo.id === item.id))) throw new Error('Check repositories again before syncing.');
-        // Replacing an edited copy is pinned to the folder trees this page was shown.
+        // Replacing an edited copy is pinned to the folder trees this page was shown. A repository the
+        // scan skipped (skip list, archived) or could not check is refused here too.
         for (const item of request) {
           const scanned = lastScan.repos.find(repo => repo.id === item.id);
+          if (scanned.skipped || scanned.error) throw new Error(`${item.id} cannot be synced. ${scanned.skipped ? `Skipped: ${scanned.skipped}.` : scanned.error}`);
           item.replace = item.replace.map(name => {
             const skill = scanned.skills?.find(entry => entry.name === name && entry.status === 'customized');
             if (!skill) throw new Error('Check repositories again before syncing.');
