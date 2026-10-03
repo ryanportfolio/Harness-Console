@@ -34,6 +34,20 @@ export function classifications(text) {
   return found;
 }
 const PR_TITLE = 'Sync skills from Harness-Firmware';
+// Skills a repository keeps as they are: a sync never updates, replaces or removes a locked skill.
+// The list lives in the repository, so it travels with it: {"version": 1, "locks": {"<skill>": "<reason>"}}.
+export const LOCKS = '.agents/skill-locks.json';
+const LOCK_SHAPE = `${LOCKS}: expected {"version": 1, "locks": {"<skill>": "<reason>"}}`;
+export function parseLocks(text) {
+  let data; try { data = JSON.parse(text); } catch { throw new Error(LOCK_SHAPE); }
+  if (data?.version !== 1 || !data.locks || typeof data.locks !== 'object' || Array.isArray(data.locks) || Object.entries(data.locks).some(([name, why]) => !SKILL_NAME.test(name) || typeof why !== 'string')) throw new Error(LOCK_SHAPE);
+  return new Map(Object.entries(data.locks));
+}
+// A missing file locks nothing; one that cannot be read stops the repository instead of unlocking it.
+async function readLocks(git, rev) {
+  const present = await git(['cat-file', '-e', `${rev}:${LOCKS}`]).then(() => true, () => false);
+  return present ? parseLocks(await git(['show', `${rev}:${LOCKS}`])) : new Map();
+}
 export const SKIP_FILE = fileURLToPath(new URL('./sync-skip.json', import.meta.url));
 const SKILL_NAME = /^[A-Za-z0-9_-]+$/;
 // Marks a Codex adapter the repository's own generator writes (and rebuilds); same test it uses.
@@ -260,7 +274,10 @@ export async function compareRepo({ template, folder, rev = 'origin/main', execu
     skills.push({ name, codex: true, status: pristine(PARTS[1], name) || await generated(name) ? 'removed' : 'removed-edited' });
   }
   const harness = [...local[PARTS[0]].keys()].some(name => template.history[PARTS[0]].has(name));
-  return { harness, nativeCopies, skills: skills.sort((a, b) => a.name.localeCompare(b.name)) };
+  // A locked skill keeps its own status in `was` and offers nothing to pick, whatever it would have been.
+  const locks = await readLocks(git, rev);
+  const shown = skills.map(skill => locks.has(skill.name) ? { name: skill.name, ...(skill.codex && { codex: true }), status: 'locked', reason: locks.get(skill.name), was: skill.status } : skill);
+  return { harness, nativeCopies, skills: shown.sort((a, b) => a.name.localeCompare(b.name)) };
 }
 
 // Checkouts of a clone (its own folder and every linked worktree) whose committed skill copies are
@@ -318,13 +335,15 @@ export async function scanSkills({ root, execute = run, template: opened, cache,
     const github = await githubState(clone.id, execute);
     const renamed = github.name ? skipReason(skipList, github.name) : null;
     if (renamed !== null) return { ...clone, harness: true, skipped: renamed };
-    let repo;
+    let repo, head;
     try {
       await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
-      const head = (await execute('git', ['-C', clone.folder, 'rev-parse', 'origin/main'])).trim();
+      head = (await execute('git', ['-C', clone.folder, 'rev-parse', 'origin/main'])).trim();
+    } catch (error) { return { ...clone, harness: true, error: `Could not fetch. ${reason(error)}` }; }
+    try {
       const worktrees = await staleWorktrees({ template, folder: clone.folder, execute }).catch(() => []);
       repo = { ...clone, head, ...await compareRepo({ template, folder: clone.folder, execute }), worktrees };
-    } catch (error) { return { ...clone, harness: true, error: `Could not fetch. ${reason(error)}` }; }
+    } catch (error) { return { ...clone, harness: true, error: `Could not compare. ${reason(error)}` }; }
     if (!repo.harness) return repo;
     return github.skipped ? { ...clone, harness: true, skipped: github.skipped } : github.blocked ? { ...clone, harness: true, error: github.blocked } : repo;
   });
@@ -541,6 +560,38 @@ function removedSummary(result) {
   return [`- removed-skills.mjs: ${warnings.length} ${warnings.length === 1 ? 'warning' : 'warnings'}, not blocking:`, ...shown, ...(warnings.length > shown.length ? [`  - and ${warnings.length - shown.length} more`] : [])];
 }
 
+// Pushes the worktree's commit to a new branch, opens a pull request into main and squash-merges it.
+// Main is never pushed to directly. Returns { branch, url }; a failure after the push carries them.
+async function mergeCommit({ git, execute, worktree, github, commit, base, title, body, say }) {
+  const branch = await freeBranch(git, base);
+  // A plain push of a new branch: it never moves main and never overwrites an existing branch.
+  await git([...GIT_CRED, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`]);
+  // Run from the worktree, whose origin is this repository, in case gh reads the local remotes.
+  let out;
+  try { out = await execute('gh', ['pr', 'create', '--repo', github.name, '--base', github.branch, '--head', branch, '--title', title, '--body', body], { cwd: worktree }); }
+  catch (error) { throw Object.assign(new Error(`Pushed branch ${branch}, but could not open the pull request: ${reason(error)}. Open it on GitHub by hand.`), { branch }); }
+  const url = String(out).split(/\r?\n/).map(line => line.trim()).find(line => /^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+$/.test(line)) ?? null;
+  if (!url) throw Object.assign(new Error(`Opened a pull request from ${branch}, but gh printed no link to merge. Merge it on GitHub by hand.`), { branch });
+  // Squash-merged straight away, pinned to the commit the checks ran on. A merge GitHub refuses
+  // (branch protection, required checks, a conflict with a newer main, a branch that moved since
+  // the push) leaves the pull request open and fails this repository.
+  try { await execute('gh', ['pr', 'merge', url, '--squash', '--match-head-commit', commit], { cwd: worktree }); }
+  catch (error) { throw Object.assign(new Error(`Opened ${url}, but could not merge it: ${reason(error)}. Merge it on GitHub by hand.`), { branch, url }); }
+  // On a branch with a merge queue, gh pr merge can succeed by queueing the pull request or turning on
+  // auto-merge. The branch is deleted only once GitHub reports the pull request merged; a state that
+  // cannot be read after three tries is reported as unconfirmed, and the branch stays.
+  let state = '', lookup = null;
+  for (let attempt = 0; attempt < 3 && !state; attempt++) {
+    if (attempt) await new Promise(resolve => setTimeout(resolve, 1000));
+    try { state = String(await execute('gh', ['pr', 'view', url, '--json', 'state', '--jq', '.state'], { cwd: worktree })).trim(); lookup = null; }
+    catch (error) { lookup = error; }
+  }
+  if (!state) throw Object.assign(new Error(`Asked GitHub to merge ${url}, but could not confirm the merge: ${reason(lookup)}. Check it on GitHub; the branch stays.`), { branch, url });
+  if (state !== 'MERGED') throw Object.assign(new Error(`Opened ${url}; GitHub queued it instead of merging (state ${state}). It merges when its checks pass; the branch stays until then.`), { branch, url });
+  await git([...GIT_CRED, 'push', '--quiet', 'origin', '--delete', branch]).catch(() => say(`merged, but could not delete branch ${branch}`));
+  return { branch, url };
+}
+
 // Applies one repository's selection in a temporary worktree on origin/main, pushes it to a new
 // branch, opens a pull request into main and squash-merges it. Main is never pushed to directly.
 async function applyRepo({ template, clone, skipList, apply, remove, replace, execute, onOutput }) {
@@ -612,33 +663,8 @@ async function applyRepo({ template, clone, skipList, apply, remove, replace, ex
     const source = `Template: ${TEMPLATE}@${template.head.slice(0, 7)}`;
     await git(['commit', '-q', '-m', PR_TITLE, '-m', [...changes, source].join('\n')]);
     const commit = (await git(['rev-parse', 'HEAD'])).trim();
-    const branch = await freeBranch(git, `harness-sync/${template.head.slice(0, 7)}`);
-    // A plain push of a new branch: it never moves main and never overwrites an existing branch.
-    await git([...GIT_CRED, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`]);
     const body = [...changes, source, '', 'Checks run on this change in a temporary checkout of main before it was committed:', ...checks, '', 'Opened by Harness Console skill sync.'].join('\n');
-    // Run from the worktree, whose origin is this repository, in case gh reads the local remotes.
-    let out;
-    try { out = await execute('gh', ['pr', 'create', '--repo', github.name, '--base', github.branch, '--head', branch, '--title', PR_TITLE, '--body', body], { cwd: worktree }); }
-    catch (error) { throw Object.assign(new Error(`Pushed branch ${branch}, but could not open the pull request: ${reason(error)}. Open it on GitHub by hand.`), { branch }); }
-    const url = String(out).split(/\r?\n/).map(line => line.trim()).find(line => /^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+$/.test(line)) ?? null;
-    if (!url) throw Object.assign(new Error(`Opened a pull request from ${branch}, but gh printed no link to merge. Merge it on GitHub by hand.`), { branch });
-    // Squash-merged straight away, pinned to the commit the checks ran on. A merge GitHub refuses
-    // (branch protection, required checks, a conflict with a newer main, a branch that moved since
-    // the push) leaves the pull request open and fails this repository.
-    try { await execute('gh', ['pr', 'merge', url, '--squash', '--match-head-commit', commit], { cwd: worktree }); }
-    catch (error) { throw Object.assign(new Error(`Opened ${url}, but could not merge it: ${reason(error)}. Merge it on GitHub by hand.`), { branch, url }); }
-    // On a branch with a merge queue, gh pr merge can succeed by queueing the pull request or turning on
-    // auto-merge. The branch is deleted only once GitHub reports the pull request merged; a state that
-    // cannot be read after three tries is reported as unconfirmed, and the branch stays.
-    let state = '', lookup = null;
-    for (let attempt = 0; attempt < 3 && !state; attempt++) {
-      if (attempt) await new Promise(resolve => setTimeout(resolve, 1000));
-      try { state = String(await execute('gh', ['pr', 'view', url, '--json', 'state', '--jq', '.state'], { cwd: worktree })).trim(); lookup = null; }
-      catch (error) { lookup = error; }
-    }
-    if (!state) throw Object.assign(new Error(`Asked GitHub to merge ${url}, but could not confirm the merge: ${reason(lookup)}. Check it on GitHub; the branch stays.`), { branch, url });
-    if (state !== 'MERGED') throw Object.assign(new Error(`Opened ${url}; GitHub queued it instead of merging (state ${state}). It merges when its checks pass; the branch stays until then.`), { branch, url });
-    await git([...GIT_CRED, 'push', '--quiet', 'origin', '--delete', branch]).catch(() => say(`merged, but could not delete branch ${branch}`));
+    const { branch, url } = await mergeCommit({ git, execute, worktree, github, commit, base: `harness-sync/${template.head.slice(0, 7)}`, title: PR_TITLE, body, say });
     say(`merged ${url} (${changes.join('; ')})`);
     return { id: clone.id, result: 'merged', commit, branch, url };
   } finally {
@@ -693,6 +719,53 @@ export async function applySkills({ root, selection, execute = run, template: op
   const prs = results.filter(result => result.result === 'merged').length;
   onOutput(`Done. ${prs} ${prs === 1 ? 'pull request' : 'pull requests'} merged, ${results.filter(result => result.result === 'current').length} already current.\n`);
   return results;
+}
+
+// Locks or unlocks one skill in one repository: edits .agents/skill-locks.json in a temporary worktree
+// on origin/main and merges it through a pull request, the same way a sync does. The skip list and
+// GitHub's archived flag are checked here too. Returns { id, result: 'merged' | 'current', url? }.
+export async function setSkillLock({ root, id, skill, lock, reason: why = '', execute = run, skip, onOutput = () => {} }) {
+  const say = text => onOutput(`${id}: ${text}\n`);
+  const skipList = skip ?? await readSkipList();
+  const clone = (await findClones({ root, execute })).find(item => item.id === id);
+  if (!clone) throw new Error('No clone in the CoreWise folder.');
+  const github = await githubState(id, execute);
+  const listed = skipReason(skipList, id) ?? (github.name ? skipReason(skipList, github.name) : null);
+  if (listed !== null) throw new Error(`Skipped: ${listed}. Nothing was written.`);
+  if (github.skipped) throw new Error(`Skipped: ${github.skipped}. Nothing was written.`);
+  if (github.blocked) throw new Error(github.blocked);
+  await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
+  const head = (await execute('git', ['-C', clone.folder, 'rev-parse', 'origin/main'])).trim();
+  const temp = await realpath(await mkdtemp(path.join(tmpdir(), 'corewise-lock-')));
+  const worktree = path.join(temp, 'work');
+  const git = args => execute('git', ['-C', worktree, ...args]);
+  try {
+    await execute('git', ['-C', clone.folder, 'worktree', 'add', '--quiet', '--detach', worktree, head]);
+    const full = path.join(worktree, ...LOCKS.split('/'));
+    const locks = await exists(full) ? parseLocks(await readFile(full, 'utf8')) : new Map();
+    if (lock ? locks.get(skill) === why : !locks.has(skill)) { say(`${skill} is already ${lock ? 'locked' : 'unlocked'}`); return { id, result: 'current' }; }
+    if (lock) locks.set(skill, why); else locks.delete(skill);
+    await mkdir(path.dirname(full), { recursive: true });
+    await writeFile(full, `${JSON.stringify({ version: 1, locks: Object.fromEntries([...locks].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) }, null, 2)}\n`);
+    await git(['add', '--', LOCKS]);
+    const title = lock ? `Lock ${skill} against skill sync` : `Unlock ${skill} for skill sync`;
+    const detail = lock ? `Harness Console skill sync leaves ${skill} as it is in this repository${why ? `: ${why}` : ''}.` : `Harness Console skill sync can update ${skill} again.`;
+    await git(['commit', '-q', '-m', title, '-m', detail]);
+    const commit = (await git(['rev-parse', 'HEAD'])).trim();
+    const { branch, url } = await mergeCommit({ git, execute, worktree, github, commit, base: `harness-lock/${skill}`, title, body: `${detail}\n\nThe list is ${LOCKS}.\n\nOpened by Harness Console skill sync.`, say });
+    say(`merged ${url} (${lock ? 'locked' : 'unlocked'} ${skill})`);
+    return { id, result: 'merged', commit, branch, url };
+  } finally {
+    await removeWorktree(clone.folder, temp, worktree, execute, say);
+  }
+}
+export function normalizeLock(body) {
+  validateRepo(body?.id);
+  if (typeof body.skill !== 'string' || !SKILL_NAME.test(body.skill)) throw new Error('Invalid skill name.');
+  if (typeof body.lock !== 'boolean') throw new Error('Choose lock or unlock.');
+  const why = body.reason === undefined ? '' : body.reason;
+  if (typeof why !== 'string' || why.length > 300 || /[\r\n]/.test(why)) throw new Error('Keep the reason to one line of at most 300 characters.');
+  return { id: body.id, skill: body.skill, lock: body.lock, reason: why.trim() };
 }
 
 export function normalizeSelection(value) {

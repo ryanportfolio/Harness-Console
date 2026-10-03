@@ -76,7 +76,7 @@ async function poll() {
     const { job } = await api('job'); if (!job) return;
     busy = job.status === 'running'; $('login').disabled = busy; $('refresh').disabled = busy; $('connectButton').disabled = busy; renderLocal();
     if (job.kind === 'create') renderCreateJob(job);
-    else if (job.kind === 'sync') renderSyncJob(job);
+    else if (job.kind === 'sync' || job.kind === 'sync-lock') renderSyncJob(job);
     else if (job.kind === 'dsh') renderDshJob(job);
     else {
       const verb = job.kind === 'update' ? 'Update' : 'Clone';
@@ -238,7 +238,7 @@ const sync = { scanned: false, scanning: false, data: null, armed: false };
 const hasStatus = (status, codex) => skill => skill.status === status && (codex === undefined || Boolean(skill.codex) === codex);
 const SYNC_GROUPS = [
   [hasStatus('behind', false), 'Update', true], [hasStatus('new', false), 'Add', true], [skill => hasStatus('behind', true)(skill) || hasStatus('new', true)(skill), 'Codex only', true],
-  [hasStatus('removed'), 'Remove', true], [hasStatus('customized'), 'Edited here', true], [hasStatus('removed-edited'), 'Removed upstream, edited here'], [hasStatus('off'), 'Turned off'],
+  [hasStatus('removed'), 'Remove', true], [hasStatus('customized'), 'Edited here', true], [hasStatus('removed-edited'), 'Removed upstream, edited here'], [hasStatus('off'), 'Turned off'], [hasStatus('locked'), 'Locked'],
 ];
 const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 async function scanSync() {
@@ -393,6 +393,24 @@ async function compareSync(repo, skill) {
   renderStory(repo, skill, result.story); renderDiff(repo, skill, result.story, result.diff);
 }
 $('syncCompareClose').onclick = () => $('syncCompare').close();
+// Locking writes .agents/skill-locks.json in the repository and merges it, the way a sync does; a locked
+// skill is never offered again until it is unlocked, so Select all cannot pick it.
+async function changeLock(repo, skill, lock) {
+  let reason = '';
+  if (lock) { const answer = prompt(`Lock ${skill.name} in ${repo.name}? Skill sync will leave it as it is, including Select all. This merges a change to .agents/skill-locks.json on GitHub.\n\nReason (optional):`, ''); if (answer === null) return; reason = answer.trim().slice(0, 300); }
+  else if (!confirm(`Unlock ${skill.name} in ${repo.name}? Skill sync can update it again. This merges a change to .agents/skill-locks.json on GitHub.`)) return;
+  try { await api('sync-lock', { id: repo.id, skill: skill.name, lock, reason }); lastJobStatus = undefined; await poll(); }
+  catch (error) { $('syncActivity').hidden = false; $('syncActivityTitle').textContent = 'Lock needs attention'; $('syncJobState').textContent = ''; $('syncLog').textContent = error.message; }
+}
+function lockButton(repo, skill, lock) {
+  const button = document.createElement('button'); button.type = 'button'; button.className = 'sync-lock'; button.dataset.lock = '';
+  button.textContent = lock ? 'Lock' : 'Unlock'; button.title = lock ? `Keep ${skill.name} as it is in ${repo.name}; sync skips it` : `Let sync update ${skill.name} in ${repo.name} again`;
+  button.disabled = busy; button.onclick = () => void changeLock(repo, skill, lock); return button;
+}
+function lockedRow(repo, skill) {
+  const row = document.createElement('span'); row.className = 'sync-edited';
+  const b = document.createElement('b'); b.append(compareButton(repo, skill)); row.append(b, skill.reason ? `: ${skill.reason} ` : ' ', lockButton(repo, skill, false)); return row;
+}
 function syncCheckbox(repo, skill, checked) {
   const label = document.createElement('label'); const input = document.createElement('input'); input.type = 'checkbox'; input.checked = checked;
   input.dataset.repo = repo.id; input.dataset.skill = skill.name; input.dataset.action = { removed: 'remove', customized: 'replace' }[skill.status] ?? 'apply';
@@ -400,13 +418,14 @@ function syncCheckbox(repo, skill, checked) {
   if (skill.status !== 'customized') {
     label.append(input, compareButton(repo, skill));
     if (skill.codex && ['behind', 'new'].includes(skill.status)) { const tag = document.createElement('span'); tag.className = 'plain'; tag.textContent = skill.status === 'new' ? 'new' : 'update'; label.append(tag); }
+    label.append(lockButton(repo, skill, true));
     return label;
   }
   // An edited copy names what differs, so replacing it is a choice made with the edits in view.
   const { changed, added, missing } = skill.files;
   const parts = [changed.length && `${changed.join(', ')} changed`, added.length && `${added.join(', ')} added here`, missing.length && `${missing.join(', ')} missing here`].filter(Boolean);
   const text = document.createElement('span'); const b = document.createElement('b'); b.append(compareButton(repo, skill)); text.append(b, `: ${parts.join('; ') || 'Codex copy differs'}`);
-  label.className = 'sync-edited'; label.append(input, text); return label;
+  label.className = 'sync-edited'; label.append(input, text, ' ', lockButton(repo, skill, true)); return label;
 }
 function syncRepoBlock(repo) {
   const section = document.createElement('section'); section.className = 'sync-repo';
@@ -421,7 +440,7 @@ function syncRepoBlock(repo) {
     toggle.append(box, 'All updates and additions'); head.append(toggle);
   }
   const counts = document.createElement('p'); counts.className = 'sync-counts';
-  counts.textContent = [`${tally('same')} current`, tally('behind', false) && `${tally('behind', false)} behind`, tally('new', false) && `${tally('new', false)} new`, tally('behind', true) && `${tally('behind', true)} Codex-only behind`, tally('new', true) && `${tally('new', true)} Codex-only new`, tally('removed') + tally('removed-edited') && `${tally('removed') + tally('removed-edited')} removed upstream`, tally('customized') && `${tally('customized')} edited here`, tally('off') && `${tally('off')} turned off`, repo.worktrees?.length && `${repo.worktrees.length} ${repo.worktrees.length === 1 ? 'checkout' : 'checkouts'} on older skills`].filter(Boolean).join(', ');
+  counts.textContent = [`${tally('same')} current`, tally('behind', false) && `${tally('behind', false)} behind`, tally('new', false) && `${tally('new', false)} new`, tally('behind', true) && `${tally('behind', true)} Codex-only behind`, tally('new', true) && `${tally('new', true)} Codex-only new`, tally('removed') + tally('removed-edited') && `${tally('removed') + tally('removed-edited')} removed upstream`, tally('customized') && `${tally('customized')} edited here`, tally('off') && `${tally('off')} turned off`, tally('locked') && `${tally('locked')} locked`, repo.worktrees?.length && `${repo.worktrees.length} ${repo.worktrees.length === 1 ? 'checkout' : 'checkouts'} on older skills`].filter(Boolean).join(', ');
   section.append(head, counts);
   for (const [match, label, checkable] of SYNC_GROUPS) {
     const skills = repo.skills.filter(match); if (!skills.length) continue;
@@ -429,6 +448,7 @@ function syncRepoBlock(repo) {
     const name = document.createElement('span'); name.textContent = label;
     const list = document.createElement('div'); list.className = 'sync-skills';
     if (checkable) list.append(...skills.map(skill => syncCheckbox(repo, skill, false)));
+    else if (label === 'Locked') list.append(...skills.map(skill => lockedRow(repo, skill)));
     else list.append(...skills.map(skill => { if (skill.status !== 'off') return compareButton(repo, skill, 'plain'); const span = document.createElement('span'); span.className = 'plain'; span.textContent = skill.name; return span; }));
     group.append(name, list); section.append(group);
   }
@@ -491,7 +511,7 @@ function renderSyncFoot() {
   $('syncSelectAll').disabled = $('syncClearAll').disabled = busy || sync.scanning;
   $('syncApply').disabled = busy || sync.scanning || !selection.length;
   $('syncApply').firstChild.textContent = sync.armed ? `Confirm ${count(selection.length, 'repository', 'repositories')} ` : 'Sync and merge ';
-  for (const input of $('syncRepos').querySelectorAll('input')) input.disabled = busy;
+  for (const input of $('syncRepos').querySelectorAll('input, button[data-lock]')) input.disabled = busy;
 }
 async function applySync() {
   const selection = syncSelection(); if (!selection.length) return;
@@ -502,7 +522,8 @@ async function applySync() {
 }
 function renderSyncJob(job) {
   $('syncActivity').hidden = false;
-  $('syncActivityTitle').textContent = job.status === 'running' ? 'Syncing skills' : job.status === 'complete' ? 'Skills synced' : 'Sync needs attention';
+  const lock = job.kind === 'sync-lock';
+  $('syncActivityTitle').textContent = job.status === 'running' ? (lock ? 'Updating skill lock' : 'Syncing skills') : job.status === 'complete' ? (lock ? 'Skill lock updated' : 'Skills synced') : lock ? 'Lock needs attention' : 'Sync needs attention';
   $('syncJobState').textContent = job.status === 'running' ? 'In progress' : job.status === 'complete' ? 'Complete' : 'Failed';
   $('syncLog').textContent = job.log || 'Starting…'; $('syncLog').scrollTop = $('syncLog').scrollHeight;
   // Links only to GitHub pull request pages, the one kind of url sync.mjs returns.
