@@ -68,7 +68,7 @@ export function collectFacts() {
   if (posts !== 1) throw new Error(`facts: expected exactly one POST in usage/server.mjs, found ${posts}`);
 
   // No dependencies: every import is a node: builtin or a local file.
-  const sources = ["usage/server.mjs", "usage/tokens.mjs", "usage/pricing.mjs"];
+  const sources = ["usage/server.mjs", "usage/tokens.mjs", "usage/pricing.mjs", "usage/guard.mjs"];
   for (const f of sources) {
     for (const m of read(f).matchAll(/^import .* from "([^"]+)";/gm)) {
       if (!m[1].startsWith("node:") && !m[1].startsWith("./")) throw new Error(`facts: ${f} imports ${m[1]}; README claims zero dependencies`);
