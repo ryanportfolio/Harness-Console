@@ -8,7 +8,7 @@ Two local servers, both bound to 127.0.0.1, plain Node with no npm dependencies.
 - `server.mjs`: HTTP API and static `public/`. Checks exact loopback host and origin; mutations need the `X-CoreWise-Token` session token. `/api/health` answers app id `corewise-cloner` (kept from the old name so the launcher recognizes older builds).
 - `core.mjs`: GitHub adapter over `gh`, clone and update of `main`, `run()` (spawn, no shell).
 - `harness.mjs`: New project tab (`gh repo create --template ryanportfolio/Harness-Firmware`), skill catalog.
-- `sync.mjs`: Skill sync tab. Template cache `~/.corewise-cloner/harness-firmware.git`; applies in a temp worktree on `origin/main`, pushes a `harness-sync/<template sha7>` branch and opens a pull request with `gh pr create`; never pushes to `main`. `sync-skip.json` and GitHub's archived flag keep repositories out.
+- `sync.mjs`: Skill sync tab. Template cache `~/.corewise-cloner/harness-firmware.git`; applies in a temp worktree on `origin/main`, pushes a `harness-sync/<template sha7>` branch, opens a pull request with `gh pr create`, squash-merges it with `gh pr merge --squash` and deletes the branch; never pushes to `main` directly. A refused merge leaves the pull request open and fails that repository. `sync-skip.json` and GitHub's archived flag keep repositories out.
 - `dsh.mjs`: DSH skills tab. Reads `~/CoreWise/Harness-Firmware` at `origin/main`, installs into `~/.dsh/skills` via staging, rename swap and rollback; validates with DSH's own skill parser.
 - `usage/`: the usage tracker (formerly the whole repo). Own server, `usage/accounts.json`, cache in `usage/.state/`. The app's Usage tab embeds it in an iframe.
 

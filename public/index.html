@@ -43,11 +43,11 @@
 </div>
 <div id="syncView" role="tabpanel" hidden>
   <div class="sync-head"><div><div class="eyebrow" id="syncTemplate">Harness-Firmware main</div><h1>Skill sync</h1></div><button id="syncScan" class="primary" type="button">Check repositories <span>↻</span></button></div>
-  <p id="syncNote" class="sync-note">Compares each Harness repository cloned in your CoreWise folder with the template on GitHub. Skills edited in that repository stay as they are unless you choose to replace them with the template copy. Each repository gets a pull request from a new branch after its own checks run; main and your local folders are not touched. Repositories in the skip list or archived on GitHub are listed but never changed.</p>
+  <p id="syncNote" class="sync-note">Compares each Harness repository cloned in your CoreWise folder with the template on GitHub. Skills edited in that repository stay as they are unless you choose to replace them with the template copy. Each repository gets a pull request from a new branch after its own checks run, merged into main straight away; your local folders are not touched. Repositories in the skip list or archived on GitHub are listed but never changed.</p>
   <div id="syncTools" class="sync-tools" hidden><button id="syncSelectAll" class="quiet" type="button">Select all updates, additions and edited</button><button id="syncClearAll" class="quiet" type="button">Unselect all</button></div>
   <div id="syncRepos"></div>
   <dialog id="syncCompare" class="sync-compare" aria-labelledby="syncCompareTitle"><div class="activity-heading"><h2 id="syncCompareTitle">Compare</h2><button id="syncCompareClose" class="quiet" type="button">Close</button></div><div id="syncStory" class="compare-story"></div><div id="syncDiff" class="compare-diff" tabindex="0"></div></dialog>
-  <div id="syncFoot" class="sync-foot" hidden><span id="syncSummary"></span><button id="syncApply" class="primary" type="button">Open pull requests <span>↑</span></button></div>
+  <div id="syncFoot" class="sync-foot" hidden><span id="syncSummary"></span><button id="syncApply" class="primary" type="button">Sync and merge <span>↑</span></button></div>
   <section id="syncActivity" class="activity" hidden aria-live="polite"><div class="activity-heading"><h2 id="syncActivityTitle">Syncing skills</h2><span id="syncJobState" class="pill"></span></div><pre id="syncLog" tabindex="0"></pre><ul id="syncLinks" class="sync-links" hidden></ul></section>
 </div>
 <div id="dshView" role="tabpanel" hidden>

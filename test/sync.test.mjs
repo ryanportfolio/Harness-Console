@@ -19,11 +19,11 @@ const put = async (dir, file, text) => { await mkdir(path.dirname(path.join(dir,
 const commit = async (dir, message) => { await run('git', ['-C', dir, 'add', '-A']); await run('git', ['-C', dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', message]); };
 const json = value => `${JSON.stringify(value, null, 2)}\n`;
 
-// Stands in for gh: records every call, answers the repository lookup and pull request creation, and
-// fails on anything else. Git pushes and fetches are recorded too, so a test can prove none targets
+// Stands in for gh: records every call, answers the repository lookup, pull request creation and
+// merge (onMerge moves main on the local remote), and fails on anything else. Git pushes and fetches are recorded too, so a test can prove none targets
 // main and a skipped clone is never fetched.
 function fakeGitHub() {
-  const gh = { calls: [], pushes: [], fetches: [], archived: false, fail: null, prFail: null, name: 'owner/project', branch: 'main', pr: 'https://github.com/owner/project/pull/7' };
+  const gh = { calls: [], pushes: [], fetches: [], archived: false, fail: null, prFail: null, mergeFail: null, queued: false, merged: false, viewFail: null, head: null, onMerge: async () => {}, name: 'owner/project', branch: 'main', pr: 'https://github.com/owner/project/pull/7' };
   gh.execute = async (command, args, options) => {
     if (command === 'git' && args.includes('push')) gh.pushes.push(args);
     if (command === 'git' && args.includes('fetch')) gh.fetches.push(args);
@@ -31,7 +31,9 @@ function fakeGitHub() {
     gh.calls.push(args);
     if (gh.fail) throw new Error(gh.fail);
     if (args[0] === 'api') return `${JSON.stringify({ archived: gh.archived, name: gh.name, branch: gh.branch })}\n`;
-    if (args[0] === 'pr' && args[1] === 'create') { if (gh.prFail) throw new Error(gh.prFail); return `${gh.pr}\n`; }
+    if (args[0] === 'pr' && args[1] === 'create') { if (gh.prFail) throw new Error(gh.prFail); gh.head = args[args.indexOf('--head') + 1]; return `${gh.pr}\n`; }
+    if (args[0] === 'pr' && args[1] === 'merge') { if (gh.mergeFail) throw new Error(gh.mergeFail); gh.merged = !gh.queued; if (gh.merged) await gh.onMerge(gh.head); return ''; }
+    if (args[0] === 'pr' && args[1] === 'view') { if (gh.viewFail) throw new Error(gh.viewFail); return `${gh.merged ? 'MERGED' : 'OPEN'}\n`; }
     throw new Error(`unexpected gh call: ${args.join(' ')}`);
   };
   return gh;
@@ -81,14 +83,14 @@ async function fixture(t, { targetScript, noModes, targetModes, overrides = { ep
   await writeFile(path.join(folder, '.claude/skills/alpha/SKILL.md'), 'uncommitted work\n');
   const opened = () => openTemplate({ cache: path.join(temp, 'cache.git'), source: template });
   const gh = fakeGitHub();
+  // Stands in for the squash merge on GitHub: main fast-forwards to the sync branch.
+  gh.onMerge = branch => run('git', ['--git-dir', remote, 'update-ref', 'refs/heads/main', `refs/heads/${branch}`]);
   return { temp, root, folder, remote, opened, gh, execute: gh.execute };
 }
 
 const statuses = repo => Object.fromEntries(repo.skills.map(skill => [skill.name, skill.status]));
 const revOf = async (data, ref) => (await run('git', ['--git-dir', data.remote, 'rev-parse', '--verify', '-q', ref]).catch(() => '')).trim();
 const syncBranches = async data => (await run('git', ['--git-dir', data.remote, 'for-each-ref', '--format=%(refname)', 'refs/heads/harness-sync'])).split(/\r?\n/).filter(Boolean);
-// Stands in for merging the pull request on GitHub: main fast-forwards to the sync branch.
-const merge = (data, branch) => run('git', ['--git-dir', data.remote, 'update-ref', 'refs/heads/main', `refs/heads/${branch}`]);
 const flag = (args, name) => args[args.indexOf(name) + 1];
 const prCalls = data => data.gh.calls.filter(args => args[0] === 'pr');
 
@@ -156,55 +158,55 @@ test('compare shows a file where a skill folder belongs and every folder a remov
   assert.ok(gamma.includes('-gamma v1') && gamma.includes('-gamma adapter') && !/^\+[^+]/m.test(gamma), gamma);
 });
 
-test('apply opens a pull request from a new branch and leaves main and the working folder alone', async t => {
+test('apply merges a pull request from a new branch, deletes the branch and leaves the working folder alone', async t => {
   const data = await fixture(t);
   const template = await data.opened();
-  const main = await revOf(data, 'main');
   const log = [];
   const [outcome] = await applySkills({ root: data.root, execute: data.execute, template, selection: [{ id: 'owner/project', apply: ['alpha', 'delta', 'beta'], remove: [] }], onOutput: text => log.push(text) });
   const branch = `harness-sync/${template.head.slice(0, 7)}`;
-  assert.equal(outcome.result, 'opened');
+  assert.equal(outcome.result, 'merged');
   assert.equal(outcome.branch, branch);
   assert.equal(outcome.url, data.gh.pr);
-  // Main on the remote is unchanged; the commit lives on the new branch.
-  assert.equal(await revOf(data, 'main'), main);
-  assert.equal(await revOf(data, branch), outcome.commit);
-  assert.ok(data.gh.pushes.length > 0 && data.gh.pushes.every(args => args.at(-1) === `HEAD:refs/heads/${branch}`), JSON.stringify(data.gh.pushes));
-  const show = shows(data, branch);
+  // Main moved only through the merge; the push wrote the new branch and then deleted it.
+  assert.equal(await revOf(data, 'main'), outcome.commit);
+  assert.deepEqual(await syncBranches(data), []);
+  assert.deepEqual(data.gh.pushes.map(args => args.slice(args.indexOf('origin') + 1)), [[`HEAD:refs/heads/${branch}`], ['--delete', branch]]);
+  const show = shows(data, outcome.commit);
   assert.equal(await show('.claude/skills/alpha/SKILL.md'), 'alpha v2\n');
   assert.equal(await show('.agents/skills/alpha/SKILL.md'), 'alpha native v2\n');
   assert.equal(await show('.claude/skills/delta/scripts/tool.mjs'), 'export {};\n');
   assert.equal(await show('.claude/skills/beta/SKILL.md'), 'beta edited here\n');
   assert.equal(await show('.claude/skills/gamma/SKILL.md'), 'gamma v1\n');
   assert.deepEqual(JSON.parse(await show('.agents/skill-modes.json')).skills, { alpha: 'native', delta: 'native' });
-  assert.match(await run('git', ['--git-dir', data.remote, 'log', '-1', '--format=%B', branch]), /^Sync skills from Harness-Firmware\n\nUpdated: alpha\nAdded: delta\nTemplate: /);
-  // One pull request: this repository, into main, from the new branch, with the changes and checks.
-  const [create] = prCalls(data);
-  assert.equal(prCalls(data).length, 1);
+  assert.match(await run('git', ['--git-dir', data.remote, 'log', '-1', '--format=%B', outcome.commit]), /^Sync skills from Harness-Firmware\n\nUpdated: alpha\nAdded: delta\nTemplate: /);
+  // One pull request: this repository, into main, from the new branch, with the changes and checks, then squash-merged.
+  const [create, merged, view] = prCalls(data);
+  assert.equal(prCalls(data).length, 3);
   assert.deepEqual(create.slice(0, 2), ['pr', 'create']);
+  assert.deepEqual(merged, ['pr', 'merge', data.gh.pr, '--squash', '--match-head-commit', outcome.commit]);
+  assert.deepEqual(view.slice(0, 3), ['pr', 'view', data.gh.pr]);
   assert.equal(flag(create, '--repo'), 'owner/project'); assert.equal(flag(create, '--base'), 'main'); assert.equal(flag(create, '--head'), branch);
   assert.equal(flag(create, '--title'), 'Sync skills from Harness-Firmware');
   const body = flag(create, '--body');
   assert.match(body, new RegExp(`^Updated: alpha\\nAdded: delta\\nTemplate: ryanportfolio/Harness-Firmware@${template.head.slice(0, 7)}\\n`));
   assert.match(body, /- sync-codex-skills\.mjs: not in this repository, not run/);
   assert.match(log.join(''), /skipped beta, now customized/);
-  assert.match(log.join(''), new RegExp(`opened ${data.gh.pr} from ${branch}`));
+  assert.match(log.join(''), new RegExp(`merged ${data.gh.pr} \\(Updated: alpha; Added: delta\\)`));
   assert.equal(await readFile(path.join(data.folder, '.claude/skills/alpha/SKILL.md'), 'utf8'), 'uncommitted work\n');
   assert.equal((await run('git', ['-C', data.folder, 'worktree', 'list', '--porcelain'])).match(/^worktree /gm).length, 1);
-  // Until the pull request is merged, main still needs the sync.
-  assert.equal(statuses((await scanSkills({ root: data.root, execute: data.execute, template })).repos[0]).alpha, 'behind');
-  await merge(data, branch);
   const again = await scanSkills({ root: data.root, execute: data.execute, template });
   assert.deepEqual(statuses(again.repos[0]), { alpha: 'same', beta: 'customized', delta: 'same', epsilon: 'off', gamma: 'removed' });
 
-  // A second sync from the same template version gets a suffixed branch; the first branch stays as it was.
+  // A branch left from an earlier sync of the same template version is never overwritten: the next
+  // sync gets a suffixed branch.
+  await run('git', ['--git-dir', data.remote, 'update-ref', `refs/heads/${branch}`, outcome.commit]);
   const [removal] = await applySkills({ root: data.root, execute: data.execute, template, selection: [{ id: 'owner/project', remove: ['gamma'] }] });
-  assert.equal(removal.result, 'opened');
+  assert.equal(removal.result, 'merged');
   assert.equal(removal.branch, `${branch}-2`);
   assert.equal(await revOf(data, branch), outcome.commit);
-  assert.equal(flag(prCalls(data)[1], '--head'), `${branch}-2`);
-  await assert.rejects(shows(data, removal.branch)('.claude/skills/gamma/SKILL.md'));
-  assert.equal(await shows(data)('.claude/skills/gamma/SKILL.md'), 'gamma v1\n');
+  assert.equal(flag(prCalls(data)[3], '--head'), `${branch}-2`);
+  await assert.rejects(shows(data, removal.commit)('.claude/skills/gamma/SKILL.md'));
+  assert.equal(await revOf(data, 'main'), removal.commit);
 });
 
 test('a check that passed on main and fails after the change blocks the commit, push and pull request', async t => {
@@ -232,7 +234,7 @@ test('a check already failing on main still opens the pull request, which report
   });
   const log = [];
   const [outcome] = await applySkills({ root: data.root, execute: data.execute, template: await data.opened(), selection: [{ id: 'owner/project', apply: ['alpha'] }], onOutput: text => log.push(text) });
-  assert.equal(outcome.result, 'opened');
+  assert.equal(outcome.result, 'merged');
   const body = flag(prCalls(data)[0], '--body');
   assert.match(body, /- sync-codex-skills\.mjs --check: already failing on main \(broken on main\); still fails after this change \(broken on main\)/);
   assert.match(body, /- test-codex-contract\.mjs: passed on main and after this change/);
@@ -354,6 +356,35 @@ test('a pull request that cannot be opened names the pushed branch', async t => 
   assert.equal(await revOf(data, 'main'), main);
 });
 
+test('a pull request GitHub refuses to merge stays open with its branch, and main is unchanged', async t => {
+  const data = await fixture(t);
+  data.gh.mergeFail = 'Pull request is not mergeable: base branch policy prohibits the merge';
+  const main = await revOf(data, 'main');
+  const failure = await applySkills({ root: data.root, execute: data.execute, template: await data.opened(), selection: [{ id: 'owner/project', apply: ['alpha'] }] }).catch(error => error);
+  const [result] = failure.results;
+  assert.equal(result.result, 'failed'); assert.equal(result.url, data.gh.pr);
+  assert.equal(result.error, `Opened ${data.gh.pr}, but could not merge it: Pull request is not mergeable: base branch policy prohibits the merge. Merge it on GitHub by hand.`);
+  assert.deepEqual(await syncBranches(data), [`refs/heads/${result.branch}`]);
+  assert.equal(await revOf(data, 'main'), main);
+
+  // A merge queue: gh pr merge succeeds but only queues the pull request, so the branch stays.
+  const queued = await fixture(t);
+  queued.gh.queued = true;
+  const waiting = (await applySkills({ root: queued.root, execute: queued.execute, template: await queued.opened(), selection: [{ id: 'owner/project', apply: ['alpha'] }] }).catch(error => error)).results[0];
+  assert.equal(waiting.result, 'failed'); assert.equal(waiting.url, queued.gh.pr);
+  assert.match(waiting.error, /GitHub queued it instead of merging \(state OPEN\)/);
+  assert.deepEqual(await syncBranches(queued), [`refs/heads/${waiting.branch}`]);
+
+  // A merge that went through but whose state cannot be read is unconfirmed, not queued, and keeps its branch.
+  const unread = await fixture(t);
+  unread.gh.viewFail = 'HTTP 502';
+  const unknown = (await applySkills({ root: unread.root, execute: unread.execute, template: await unread.opened(), selection: [{ id: 'owner/project', apply: ['alpha'] }] }).catch(error => error)).results[0];
+  assert.equal(unknown.result, 'failed');
+  assert.equal(unknown.error, `Asked GitHub to merge ${unread.gh.pr}, but could not confirm the merge: HTTP 502. Check it on GitHub; the branch stays.`);
+  assert.equal(unread.gh.calls.filter(args => args[1] === 'view').length, 3);
+  assert.deepEqual(await syncBranches(unread), [`refs/heads/${unknown.branch}`]);
+});
+
 test('the committed skip list names the frozen repositories', async () => {
   const skip = await readSkipList();
   assert.deepEqual(skip.map(item => item.repo).sort(), ['ryanportfolio/cx-lab', 'ryanportfolio/threejs-interview-test']);
@@ -417,17 +448,17 @@ test('a synced native skill takes the template source hash, so the check still p
   const data = await fixture(t, { targetScript: SOURCES_CHECK, extra: { '.agents/skill-sources.json': json({ version: 1, skills: { gamma: sourceHash({ 'SKILL.md': 'gamma v1\n' }), alpha: sourceHash({ 'SKILL.md': 'alpha v1\n' }) } }) } });
   await changeTemplate(data, { '.agents/skill-sources.json': json({ version: 1, skills: { alpha: sourceHash({ 'SKILL.md': 'alpha v2\n' }), delta: sourceHash(delta) } }) }, 'record sources');
   const [outcome] = await applySkills({ root: data.root, execute: data.execute, template: await data.opened(), selection: [{ id: 'owner/project', apply: ['alpha', 'delta'], remove: ['gamma'] }] });
-  assert.equal(outcome.result, 'opened');
+  assert.equal(outcome.result, 'merged');
   // Updated and added native skills carry the template's hash; the removed skill's entry goes.
-  assert.equal(await shows(data, outcome.branch)('.agents/skill-sources.json'), json({ version: 1, skills: { alpha: sourceHash({ 'SKILL.md': 'alpha v2\n' }), delta: sourceHash(delta) } }));
+  assert.equal(await shows(data, outcome.commit)('.agents/skill-sources.json'), json({ version: 1, skills: { alpha: sourceHash({ 'SKILL.md': 'alpha v2\n' }), delta: sourceHash(delta) } }));
   assert.match(flag(prCalls(data)[0], '--body'), /- sync-codex-skills\.mjs --check: passed on main and after this change/);
 });
 
 test('a repository without native-mode support keeps its generated Codex adapter', async t => {
   const data = await fixture(t, { noModes: true });
   const [outcome] = await applySkills({ root: data.root, execute: data.execute, template: await data.opened(), selection: [{ id: 'owner/project', apply: ['alpha', 'delta'] }] });
-  assert.equal(outcome.result, 'opened');
-  const show = shows(data, outcome.branch);
+  assert.equal(outcome.result, 'merged');
+  const show = shows(data, outcome.commit);
   assert.equal(await show('.claude/skills/alpha/SKILL.md'), 'alpha v2\n');
   assert.equal(await show('.agents/skills/alpha/SKILL.md'), 'alpha native v1\n');
   await assert.rejects(show('.agents/skills/delta/SKILL.md'));
@@ -437,8 +468,8 @@ test('a repository without native-mode support keeps its generated Codex adapter
 test('a Codex mode the repository chose survives the sync', async t => {
   const data = await fixture(t, { targetModes: { alpha: 'disabled' } });
   const [outcome] = await applySkills({ root: data.root, execute: data.execute, template: await data.opened(), selection: [{ id: 'owner/project', apply: ['alpha'] }] });
-  assert.equal(outcome.result, 'opened');
-  const show = shows(data, outcome.branch);
+  assert.equal(outcome.result, 'merged');
+  const show = shows(data, outcome.commit);
   assert.equal(await show('.claude/skills/alpha/SKILL.md'), 'alpha v2\n');
   assert.equal(await show('.agents/skills/alpha/SKILL.md'), 'alpha native v1\n');
   assert.deepEqual(JSON.parse(await show('.agents/skill-modes.json')).skills, { alpha: 'disabled' });
@@ -496,9 +527,9 @@ test('a retired skill with a generated Codex adapter is removed with both folder
   const [repo] = (await scanSkills({ root: data.root, execute: data.execute, template })).repos;
   assert.equal(statuses(repo).gamma, 'removed');
   const [outcome] = await applySkills({ root: data.root, execute: data.execute, template, selection: [{ id: 'owner/project', remove: ['gamma'] }] });
-  assert.equal(outcome.result, 'opened');
-  await assert.rejects(shows(data, outcome.branch)('.claude/skills/gamma/SKILL.md'));
-  await assert.rejects(shows(data, outcome.branch)('.agents/skills/gamma/SKILL.md'));
+  assert.equal(outcome.result, 'merged');
+  await assert.rejects(shows(data, outcome.commit)('.claude/skills/gamma/SKILL.md'));
+  await assert.rejects(shows(data, outcome.commit)('.agents/skills/gamma/SKILL.md'));
 });
 
 test('a retired skill whose Codex folder holds a marked SKILL.md plus a hand-written file is removed-edited, and apply keeps both', async t => {
@@ -553,7 +584,7 @@ test('a worktree that cannot be removed is retried once, then named in a warning
   };
   const log = [];
   const [outcome] = await applySkills({ root: data.root, template: await data.opened(), execute, selection: [{ id: 'owner/project', apply: ['alpha'] }], onOutput: text => log.push(text) });
-  assert.equal(outcome.result, 'opened');
+  assert.equal(outcome.result, 'merged');
   assert.equal(removes.length, 2);
   assert.equal(removes[0], removes[1]);
   const warning = log.find(line => line.includes('warning'));
@@ -570,7 +601,7 @@ test('cleanup removes only its own worktree registration, never the user\'s stal
   const listed = async () => (await run('git', ['-C', data.folder, 'worktree', 'list', '--porcelain'])).match(/^worktree /gm).length;
   assert.equal(await listed(), 2);
   const [outcome] = await applySkills({ root: data.root, execute: data.execute, template: await data.opened(), selection: [{ id: 'owner/project', apply: ['alpha'] }] });
-  assert.equal(outcome.result, 'opened');
+  assert.equal(outcome.result, 'merged');
   assert.equal(await listed(), 2);
   assert.match(await run('git', ['-C', data.folder, 'worktree', 'list', '--porcelain']), /elsewhere/);
 });
@@ -602,12 +633,11 @@ test('replacing an edited copy offers the template copy and drops a hand-written
   assert.equal(beta.status, 'customized');
   assert.equal(beta.handCodex, true);
   const [outcome] = await applySkills({ root: data.root, execute: data.execute, template, selection: [{ id: 'owner/project', replace: [{ name: 'beta', trees: beta.trees }] }] });
-  assert.equal(outcome.result, 'opened');
-  assert.equal(await shows(data, outcome.branch)('.claude/skills/beta/SKILL.md'), 'beta v1\n');
-  await assert.rejects(shows(data, outcome.branch)('.agents/skills/beta/SKILL.md'));
-  assert.match(await run('git', ['--git-dir', data.remote, 'log', '-1', '--format=%B', outcome.branch]), /Replaced edited copies: beta\nTemplate: /);
+  assert.equal(outcome.result, 'merged');
+  assert.equal(await shows(data, outcome.commit)('.claude/skills/beta/SKILL.md'), 'beta v1\n');
+  await assert.rejects(shows(data, outcome.commit)('.agents/skills/beta/SKILL.md'));
+  assert.match(await run('git', ['--git-dir', data.remote, 'log', '-1', '--format=%B', outcome.commit]), /Replaced edited copies: beta\nTemplate: /);
   assert.match(flag(prCalls(data)[0], '--body'), /^Replaced edited copies: beta\n/);
-  await merge(data, outcome.branch);
   assert.equal(statuses((await scanSkills({ root: data.root, execute: data.execute, template })).repos[0]).beta, 'same');
 });
 
@@ -690,20 +720,18 @@ test('a Codex-only skill is offered, added as its .agents folder alone, then upd
   assert.equal(repo.skills.some(skill => skill.name === 'omega'), false);
 
   const [outcome] = await applySkills({ root: data.root, execute: data.execute, template, selection: [{ id: 'owner/project', apply: ['zeta'] }] });
-  assert.equal(outcome.result, 'opened');
-  const added = shows(data, outcome.branch);
+  assert.equal(outcome.result, 'merged');
+  const added = shows(data, outcome.commit);
   assert.equal(await added('.agents/skills/zeta/SKILL.md'), 'zeta v1\n');
   await assert.rejects(added('.claude/skills/zeta/SKILL.md'));
   assert.equal(JSON.parse(await added('.agents/skill-modes.json')).skills.zeta, 'native');
-  assert.match(await run('git', ['--git-dir', data.remote, 'log', '-1', '--format=%B', outcome.branch]), /Added: zeta\n/);
-  await merge(data, outcome.branch);
+  assert.match(await run('git', ['--git-dir', data.remote, 'log', '-1', '--format=%B', outcome.commit]), /Added: zeta\n/);
 
   await changeTemplate(data, { '.agents/skills/zeta/SKILL.md': 'zeta v2\n' }, 'zeta v2');
   template = await data.opened();
   assert.equal(statuses((await scanSkills({ root: data.root, execute: data.execute, template })).repos[0]).zeta, 'behind');
   const [update] = await applySkills({ root: data.root, execute: data.execute, template, selection: [{ id: 'owner/project', apply: ['zeta'] }] });
-  assert.equal(await shows(data, update.branch)('.agents/skills/zeta/SKILL.md'), 'zeta v2\n');
-  await merge(data, update.branch);
+  assert.equal(await shows(data, update.commit)('.agents/skills/zeta/SKILL.md'), 'zeta v2\n');
 
   // Retired with a leftover file still in the template folder: no SKILL.md, so no longer a skill.
   await changeTemplate(data, { '.agents/skills/zeta/SKILL.md': null, '.agents/skills/zeta/leftover.md': 'leftover\n' }, 'retire zeta');
@@ -711,8 +739,8 @@ test('a Codex-only skill is offered, added as its .agents folder alone, then upd
   const retired = (await scanSkills({ root: data.root, execute: data.execute, template })).repos[0].skills.find(skill => skill.name === 'zeta');
   assert.deepEqual(retired, { name: 'zeta', codex: true, status: 'removed' });
   const [removal] = await applySkills({ root: data.root, execute: data.execute, template, selection: [{ id: 'owner/project', remove: ['zeta'] }] });
-  await assert.rejects(shows(data, removal.branch)('.agents/skills/zeta/SKILL.md'));
-  assert.equal(JSON.parse(await shows(data, removal.branch)('.agents/skill-modes.json')).skills.zeta, undefined);
+  await assert.rejects(shows(data, removal.commit)('.agents/skills/zeta/SKILL.md'));
+  assert.equal(JSON.parse(await shows(data, removal.commit)('.agents/skill-modes.json')).skills.zeta, undefined);
 });
 
 test('a Codex-only skill is not offered without skill-modes.json, is off when disabled, and an edited copy is customized', async t => {
