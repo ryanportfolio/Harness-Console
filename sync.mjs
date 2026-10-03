@@ -7,8 +7,8 @@ import { run, validateRepo } from './core.mjs';
 import { TEMPLATE } from './harness.mjs';
 
 // Skill sync: compares every Harness repository cloned under root with the template's main and
-// opens one pull request per repository with the selected skill updates. The commit goes to a new
-// branch, harness-sync/<template sha7>; main is never pushed to. Status comes from git tree
+// opens and squash-merges one pull request per repository with the selected skill updates. The commit
+// goes to a new branch, harness-sync/<template sha7>, deleted after the merge. Status comes from git tree
 // hashes: a local skill folder whose tree matches some past template version was never edited,
 // so replacing it with the current version loses nothing. Anything else is left alone.
 // Before committing, the repository's own checks run in a temporary worktree: sync-codex-skills.mjs
@@ -23,6 +23,16 @@ const PARTS = ['.claude/skills', '.agents/skills'];
 // sync-codex-skills.mjs --check fails when a native skill's folder no longer matches its hash.
 const SOURCES = '.agents/skill-sources.json';
 const REGISTRIES = ['.agents/skill-modes.json', SOURCES];
+// Each active skill sits in exactly one status row of this table. Older copies of
+// test-codex-contract.mjs fail on a skill with no row (the template's current one only warns).
+const COMPATIBILITY = '.agents/CODEX-SKILL-COMPATIBILITY.md';
+const CLASS_ROW = /^\|\s*(Native|Adapted|Capability-gated|Dangerous|Claude-only)\s*\|(.*)\|\s*$/;
+// skill -> status, from the table's rows.
+export function classifications(text) {
+  const found = new Map();
+  for (const line of String(text).split(/\r?\n/)) { const match = CLASS_ROW.exec(line); if (match) for (const skill of match[2].matchAll(/`([^`]+)`/g)) found.set(skill[1], match[1]); }
+  return found;
+}
 const PR_TITLE = 'Sync skills from Harness-Firmware';
 export const SKIP_FILE = fileURLToPath(new URL('./sync-skip.json', import.meta.url));
 const SKILL_NAME = /^[A-Za-z0-9_-]+$/;
@@ -137,12 +147,13 @@ export async function openTemplate({ cache = TEMPLATE_CACHE, source = `https://g
   } });
   const modes = (await showJson(git, head, '.agents/skill-modes.json'))?.skills ?? {};
   const registries = Object.fromEntries(await Promise.all(REGISTRIES.map(async file => [file, await showJson(git, head, file)])));
+  const classes = classifications(await git(['show', `${head}:${COMPATIBILITY}`]).catch(() => ''));
   const current = await skillTrees(git, head);
   // Codex-only skills: a SKILL.md under .agents/skills with no Claude copy. A leftover folder without
   // SKILL.md is not a skill.
   const codexOnly = new Set((await git(['ls-tree', '-r', '-z', '--name-only', head, '--', `${PARTS[1]}/`])).split('\0')
     .map(file => /^\.agents\/skills\/([A-Za-z0-9_-]+)\/SKILL\.md$/.exec(file)?.[1]).filter(name => name && !current[PARTS[0]].has(name)));
-  latestTemplate = { cache, head, git, current, codexOnly, history, age, modes, registries, blobs: new Map() };
+  latestTemplate = { cache, head, git, current, codexOnly, history, age, modes, registries, classes, blobs: new Map() };
   return latestTemplate;
 }
 
@@ -479,6 +490,30 @@ async function writeRegistries(template, worktree, updates, nativeCopies) {
   }
 }
 
+// Keeps the compatibility table in step with the skills: an added skill the table does not list goes
+// into the row the template gives it, a removed skill leaves its row. Only rows that are a plain list
+// of skills, or hold no skill at all, are rewritten; a row with other text is left for the checks to
+// report. A repository without the table gets none.
+async function writeCompatibility(template, worktree, add, drop) {
+  const full = path.join(worktree, ...COMPATIBILITY.split('/'));
+  if (!await exists(full)) return;
+  const text = await readFile(full, 'utf8'); const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const listed = classifications(text);
+  const moves = new Map(drop.filter(name => listed.has(name)).map(name => [name, null]));
+  for (const name of add) if (!listed.has(name) && template.classes.has(name)) moves.set(name, template.classes.get(name));
+  if (!moves.size) return;
+  const lines = text.split(/\r?\n/).map(line => {
+    const match = CLASS_ROW.exec(line); if (!match) return line;
+    const cell = match[2].trim(), skills = [...cell.matchAll(/`([^`]+)`/g)].map(skill => skill[1]);
+    if (skills.length && !/^`[^`]+`(?:\s*,\s*`[^`]+`)*$/.test(cell)) return line;
+    const kept = skills.filter(name => !moves.has(name)).concat([...moves].filter(([, status]) => status === match[1]).map(([name]) => name));
+    if (kept.length === skills.length && kept.every((name, index) => name === skills[index])) return line;
+    kept.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+    return `| ${match[1]} | ${kept.length ? kept.map(name => `\`${name}\``).join(', ') : 'None.'} |`;
+  });
+  await writeFile(full, lines.join(eol));
+}
+
 // Runs one of the repository's own Node scripts in the worktree: { ok, out } or { ok: false, error }.
 const node = (script, args, cwd, execute) => execute(process.execPath, [script, ...args], { cwd }).then(out => ({ ok: true, out }), error => ({ ok: false, error }));
 
@@ -499,7 +534,7 @@ function removedSummary(result) {
 }
 
 // Applies one repository's selection in a temporary worktree on origin/main, pushes it to a new
-// branch and opens a pull request into main. Main itself is never pushed to.
+// branch, opens a pull request into main and squash-merges it. Main is never pushed to directly.
 async function applyRepo({ template, clone, skipList, apply, remove, replace, execute, onOutput }) {
   const say = text => onOutput(`${clone.id}: ${text}\n`);
   const github = await githubState(clone.id, execute);
@@ -541,6 +576,7 @@ async function applyRepo({ template, clone, skipList, apply, remove, replace, ex
     const handDrops = swap.filter(name => found.get(name).handCodex && !incoming(name).includes(PARTS[1])).map(name => `${PARTS[1]}/${name}`);
     await writeFolders(template, worktree, git, folders, [...drop.flatMap(name => PARTS.map(part => `${part}/${name}`)), ...handDrops], execute);
     await writeRegistries(template, worktree, [...take, ...swap].map(name => [name, true]).concat(drop.map(name => [name, false])), nativeCopies);
+    await writeCompatibility(template, worktree, [...take, ...swap], drop);
 
     // A check that passed on main must still pass after the change, or nothing is committed or pushed.
     // One already failing on main is reported in the pull request; its own CI shows the rest.
@@ -577,8 +613,14 @@ async function applyRepo({ template, clone, skipList, apply, remove, replace, ex
     try { out = await execute('gh', ['pr', 'create', '--repo', github.name, '--base', github.branch, '--head', branch, '--title', PR_TITLE, '--body', body], { cwd: worktree }); }
     catch (error) { throw Object.assign(new Error(`Pushed branch ${branch}, but could not open the pull request: ${reason(error)}. Open it on GitHub by hand.`), { branch }); }
     const url = String(out).split(/\r?\n/).map(line => line.trim()).find(line => /^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+$/.test(line)) ?? null;
-    say(`opened ${url ?? 'a pull request'} from ${branch} (${changes.join('; ')})`);
-    return { id: clone.id, result: 'opened', commit, branch, url };
+    if (!url) throw Object.assign(new Error(`Opened a pull request from ${branch}, but gh printed no link to merge. Merge it on GitHub by hand.`), { branch });
+    // Squash-merged straight away. A merge GitHub refuses (branch protection, required checks, a
+    // conflict with a newer main) leaves the pull request open and fails this repository.
+    try { await execute('gh', ['pr', 'merge', url, '--squash'], { cwd: worktree }); }
+    catch (error) { throw Object.assign(new Error(`Opened ${url}, but could not merge it: ${reason(error)}. Merge it on GitHub by hand.`), { branch, url }); }
+    await git([...GIT_CRED, 'push', '--quiet', 'origin', '--delete', branch]).catch(() => say(`merged, but could not delete branch ${branch}`));
+    say(`merged ${url} (${changes.join('; ')})`);
+    return { id: clone.id, result: 'merged', commit, branch, url };
   } finally {
     await removeWorktree(clone.folder, temp, worktree, execute, say);
   }
@@ -624,12 +666,12 @@ export async function applySkills({ root, selection, execute = run, template: op
     if (!clone) { results.push({ id, result: 'failed', error: 'No clone in the CoreWise folder.' }); onOutput(`${id}: no clone in the CoreWise folder\n`); continue; }
     if (listed !== null) { results.push({ id, result: 'failed', error: `Skipped: ${listed}.` }); onOutput(`${id}: skipped, ${listed}; nothing written\n`); continue; }
     try { results.push(await applyRepo({ template, clone, skipList, apply, remove, replace, execute, onOutput })); }
-    catch (error) { const message = reason(error); results.push({ id, result: 'failed', error: message, ...(error.branch && { branch: error.branch }) }); onOutput(`${id}: failed${error.branch ? '' : ', nothing pushed'}. ${message}\n`); }
+    catch (error) { const message = reason(error); results.push({ id, result: 'failed', error: message, ...(error.branch && { branch: error.branch }), ...(error.url && { url: error.url }) }); onOutput(`${id}: failed${error.branch ? '' : ', nothing pushed'}. ${message}\n`); }
   }
   const failed = results.filter(result => result.result === 'failed');
   if (failed.length) throw Object.assign(new Error(`${failed.length} of ${results.length} repositories failed: ${failed.map(result => result.id).join(', ')}`), { results });
-  const prs = results.filter(result => result.result === 'opened').length;
-  onOutput(`Done. ${prs} ${prs === 1 ? 'pull request' : 'pull requests'} opened, ${results.filter(result => result.result === 'current').length} already current.\n`);
+  const prs = results.filter(result => result.result === 'merged').length;
+  onOutput(`Done. ${prs} ${prs === 1 ? 'pull request' : 'pull requests'} merged, ${results.filter(result => result.result === 'current').length} already current.\n`);
   return results;
 }
 

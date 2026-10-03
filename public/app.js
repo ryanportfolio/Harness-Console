@@ -231,7 +231,7 @@ $('skillPicker').addEventListener('keydown', event => { if (event.key === 'Escap
 $('skillPickerClose').onclick = closeSkillPicker; $('skillsDone').onclick = closeSkillPicker;
 $('skillsEnableAll').onclick = () => setOptionalSkills(true); $('skillsClearOptional').onclick = () => setOptionalSkills(false);
 
-// Skill sync: compare every Harness clone with the template, then open a pull request per repository with the chosen skills.
+// Skill sync: compare every Harness clone with the template, then open and merge a pull request per repository with the chosen skills.
 const sync = { scanned: false, scanning: false, data: null, armed: false };
 // The third field marks groups with checkboxes; every box starts unchecked so a sync takes only what was picked.
 // Codex-only skills (an .agents copy and no Claude copy) get their own row for updates and additions.
@@ -490,7 +490,7 @@ function renderSyncFoot() {
   $('syncSummary').textContent = !selection.length ? 'Nothing selected' : `${picked}, across ${count(selection.length, 'repository', 'repositories')}${replacements ? '. Replaced skills lose the edits made in their repository.' : ''}`;
   $('syncSelectAll').disabled = $('syncClearAll').disabled = busy || sync.scanning;
   $('syncApply').disabled = busy || sync.scanning || !selection.length;
-  $('syncApply').firstChild.textContent = sync.armed ? `Confirm ${count(selection.length, 'pull request', 'pull requests')} ` : 'Open pull requests ';
+  $('syncApply').firstChild.textContent = sync.armed ? `Confirm ${count(selection.length, 'repository', 'repositories')} ` : 'Sync and merge ';
   for (const input of $('syncRepos').querySelectorAll('input')) input.disabled = busy;
 }
 async function applySync() {
@@ -507,7 +507,7 @@ function renderSyncJob(job) {
   $('syncLog').textContent = job.log || 'Starting…'; $('syncLog').scrollTop = $('syncLog').scrollHeight;
   // Links only to GitHub pull request pages, the one kind of url sync.mjs returns.
   const prs = (job.results ?? []).filter(item => /^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+$/.test(item.url ?? ''));
-  $('syncLinks').replaceChildren(...prs.map(item => { const a = el('a', '', `${item.id}: pull request from ${item.branch}`); a.href = item.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; return el('li', '', a); }));
+  $('syncLinks').replaceChildren(...prs.map(item => { const a = el('a', '', `${item.id}: ${item.result === 'merged' ? 'merged' : 'open'} pull request from ${item.branch}`); a.href = item.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; return el('li', '', a); }));
   $('syncLinks').hidden = !prs.length;
   $('syncScan').disabled = busy || sync.scanning; renderSyncFoot();
   if (job.status !== 'running' && lastJobStatus === 'running') void scanSync();
