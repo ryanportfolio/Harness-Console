@@ -2,7 +2,9 @@ import { mkdir, readdir, readFile, realpath, rm, stat, writeFile, access } from 
 import path from 'node:path';
 import { run, validateLeaf } from './core.mjs';
 
-export const TEMPLATE = 'ryanportfolio/Harness-Firmware';
+// The template a new install starts from. Each user picks their own in settings; every caller in the
+// app passes the chosen one, so this is only the starting value and a default for direct callers.
+export const DEFAULT_TEMPLATE = 'ryanportfolio/Harness-Firmware';
 
 // The template's own description of itself: which paths a new project drops, which files it must
 // keep, the README stub, and how skills are grouped and depend on each other. The picker reads it
@@ -122,7 +124,7 @@ function frontmatterDescription(text) {
 // Reads the template's skill folders and manifest from GitHub so the picker matches what will be
 // cloned. Skill names come from the live tree (Claude or Codex folders); groups, required skills and
 // dependencies come from the manifest.
-export async function skillCatalog({ template = TEMPLATE, execute = run } = {}) {
+export async function skillCatalog({ template = DEFAULT_TEMPLATE, execute = run } = {}) {
   const [manifestText, treeText] = await Promise.all([
     execute('gh', ['api', `repos/${template}/contents/${MANIFEST_PATH}`, '-H', 'Accept: application/vnd.github.raw']).catch(error => { throw new Error(`Could not read ${MANIFEST_PATH} from ${template}. ${error.message}`); }),
     execute('gh', ['api', `repos/${template}/git/trees/HEAD?recursive=1`]),
@@ -201,9 +203,9 @@ async function assertContract(destination, manifest) {
   if (scratch) throw new Error(`Generated project still contains template scratch directory: ${scratch.name}`);
 }
 
-// Creates a GitHub repository from the Harness Firmware template, clones it under root, strips
+// Creates a GitHub repository from the chosen template, clones it under root, strips
 // template-only files, drops a README stub, omits deselected skills, commits, and pushes.
-export async function createProject({ root, name, description = '', isPrivate = true, disabledSkills = [], catalog, template = TEMPLATE, execute = run, onOutput = () => {} }) {
+export async function createProject({ root, name, description = '', isPrivate = true, disabledSkills = [], catalog, template = DEFAULT_TEMPLATE, execute = run, onOutput = () => {} }) {
   validateLeaf(name);
   if (name.length > 100) throw new Error('Repository name is too long.');
   description = String(description ?? '').trim().slice(0, 350);

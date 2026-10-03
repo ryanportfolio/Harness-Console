@@ -9,7 +9,7 @@ import { createProject, skillCatalog } from './harness.mjs';
 import { applySkills, compareSkill, normalizeLock, normalizeSelection, scanSkills, setSkillLock, skillStory } from './sync.mjs';
 import { compareDsh, installDsh, normalizeChoices, previewDsh } from './dsh.mjs';
 import { TRACKER } from './launcher.mjs';
-import { defaults, legacyPaths, loadSettings, pausedList, readSettings, settingsFile as defaultSettingsFile, updateSettings } from './settings.mjs';
+import { defaults, legacyPaths, loadSettings, pausedList, readSettings, settingsFile as defaultSettingsFile, templateIds, templateOf, updateSettings } from './settings.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/new-project.css': ['new-project.css', 'text/css'], '/sync.css': ['sync.css', 'text/css'] };
@@ -27,13 +27,17 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
   const root = rootOverride ?? settings.workspace;
   let lastSelected = settings.lastSelected;
   const needRoot = () => { if (!root) throw new Error(settingsError ?? `Choose a workspace folder first: set "workspace" in ${settingsFile ?? 'the settings file'}.`); return root; };
-  // Paused projects are read from the file each time, so a pause added while the app runs holds.
-  const paused = async () => {
+  // Scans, syncs and locks read the file each time, so a pause or a project template set while the app
+  // runs holds at once.
+  const current = async () => {
     if (settingsError) throw new Error(settingsError);
-    if (!settingsFile) return pausedList(settings);
-    try { return pausedList(await readSettings(settingsFile)); }
+    if (!settingsFile) return settings;
+    try { return await readSettings(settingsFile); }
     catch (error) { throw new Error(`Could not read the settings file. ${error.message}`); }
   };
+  // Template caches live beside the settings file; in-memory settings use sync.mjs's own default.
+  const cacheDir = settingsFile ? path.dirname(settingsFile) : undefined;
+  const templateOptions = current => ({ defaultTemplate: current.defaultTemplate, templateFor: (...ids) => templateOf(current, ...ids), templates: templateIds(current), cacheDir });
   // DSH installs read the local Harness-Firmware checkout; the preview keeps the rendered bytes,
   // so an install writes exactly what was shown.
   const dshSource = () => path.join(needRoot(), 'Harness-Firmware');
@@ -42,7 +46,7 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
   // The template's skill list is refetched each time a page loads the picker, so a create checks the
   // list the most recent page load showed. A create with no list yet fetches one; a failed fetch is
   // not kept. createProject also checks the clone's own manifest, so an old list cannot skip a rule.
-  const fetchSkills = () => { const pending = catalog(); skills = pending; pending.catch(() => { if (skills === pending) skills = null; }); return pending; };
+  const fetchSkills = () => { const pending = catalog({ template: settings.defaultTemplate }); skills = pending; pending.catch(() => { if (skills === pending) skills = null; }); return pending; };
   const loadSkills = () => skills ?? fetchSkills();
   const server = http.createServer(async (req, res) => {
     const origin = `http://127.0.0.1:${server.address().port}`;
@@ -64,24 +68,26 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
         try { up = (await fetch(`${trackerUrl}/api/usage`, { signal: AbortSignal.timeout(1500) })).ok; } catch {}
         return reply(res, 200, { up, url: trackerUrl });
       }
-      if (req.method === 'GET' && url.pathname === '/api/status') return reply(res, 200, { ...await adapter.account(), root, token, lastSelected, build, settingsFile, settingsError });
+      if (req.method === 'GET' && url.pathname === '/api/status') return reply(res, 200, { ...await adapter.account(), root, token, lastSelected, build, settingsFile, settingsError, defaultTemplate: settings.defaultTemplate });
       if (req.method === 'GET' && url.pathname === '/api/repos') { repos = await adapter.repositories(); return reply(res, 200, { repos }); }
       if (req.method === 'GET' && url.pathname === '/api/skills') {
         try { return reply(res, 200, await fetchSkills()); }
         catch (error) { return reply(res, 502, { error: `Could not read the template's skills. ${error.message}` }); }
       }
       if (req.method === 'GET' && url.pathname === '/api/sync') {
-        try { lastScan = await scan({ root: needRoot(), skip: await paused() }); return reply(res, 200, lastScan); }
+        try { const now = await current(); lastScan = await scan({ root: needRoot(), skip: pausedList(now), ...templateOptions(now) }); return reply(res, 200, lastScan); }
         catch (error) { return reply(res, 502, { error: `Could not compare skills. ${error.message}` }); }
       }
       if (req.method === 'GET' && url.pathname === '/api/sync/compare') {
-        // Compares the exact commits the page was shown: the scanned origin/main and template head.
-        // The page names both, so a newer scan from another tab is refused rather than shown under old labels.
+        // Compares the exact commits the page was shown: the scanned origin/main and the head of that
+        // repository's template. The page names both, so a newer scan from another tab is refused
+        // rather than shown under old labels.
         const repo = lastScan?.repos.find(item => item.id === url.searchParams.get('id'));
         const name = url.searchParams.get('name');
-        if (!repo?.skills?.some(skill => skill.name === name && skill.status !== 'off') || url.searchParams.get('rev') !== repo.head || url.searchParams.get('template') !== lastScan.template.head) return reply(res, 404, { error: 'Check repositories again.' });
+        const template = repo?.template ?? lastScan?.template;
+        if (!repo?.skills?.some(skill => skill.name === name && skill.status !== 'off') || url.searchParams.get('rev') !== repo.head || url.searchParams.get('template') !== template.head) return reply(res, 404, { error: 'Check repositories again.' });
         // The story (who changed what, when) is extra context; without it the diff still shows.
-        const args = { folder: repo.folder, rev: repo.head, name, templateHead: lastScan.template.head };
+        const args = { folder: repo.folder, rev: repo.head, name, templateHead: template.head, templateId: template.id };
         try { const [diff, story] = await Promise.all([compareSync(args), storySync(args).catch(() => null)]); return reply(res, 200, { name, diff, story }); }
         catch (error) { return reply(res, 502, { error: `Could not compare ${name}. ${error.message}` }); }
       }
@@ -114,9 +120,10 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
       if (job?.status === 'running') return reply(res, 409, { error: 'An operation is already running.' });
       const kind = url.pathname.slice('/api/'.length);
       if (['clone', 'update', 'create', 'sync', 'sync-lock'].includes(kind)) needRoot();
-      const skip = ['sync', 'sync-lock'].includes(kind) ? await paused() : null;
+      const now = ['sync', 'sync-lock'].includes(kind) ? await current() : null;
+      const skip = now && pausedList(now);
       if (kind === 'clone' || kind === 'update') { validateRepo(body.id); if (!repos.some(repo => repo.id === body.id)) throw new Error('Refresh and select a repository from your account.'); }
-      let request = null;
+      let request = null, syncTemplateFor = null;
       if (kind === 'dsh') {
         request = normalizeChoices(body.skills);
         if (!lastDsh || body.previewId !== lastDsh.id || request.some(item => !lastDsh.skills.some(skill => skill.name === item.name))) throw new Error('Check DSH skills again before installing.');
@@ -130,17 +137,24 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
       if (kind === 'sync') {
         request = normalizeSelection(body.repos);
         if (request.some(item => !lastScan?.repos.some(repo => repo.id === item.id))) throw new Error('Check repositories again before syncing.');
+        // The page names the template head it compared each repository against. A newer scan from
+        // another tab, with a different template or head, is refused rather than applied under old labels.
+        const shownTemplate = new Map(body.repos.map(item => [item.id, item.template]));
         // Replacing an edited copy is pinned to the folder trees this page was shown. A repository the
         // scan skipped (skip list, archived) or could not check is refused here too.
         for (const item of request) {
           const scanned = lastScan.repos.find(repo => repo.id === item.id);
           if (scanned.skipped || scanned.error) throw new Error(`${item.id} cannot be synced. ${scanned.skipped ? `Skipped: ${scanned.skipped}.` : scanned.error}`);
+          if (shownTemplate.get(item.id) !== (scanned.template ?? lastScan.template)?.head) throw new Error('Check repositories again before syncing.');
           item.replace = item.replace.map(name => {
             const skill = scanned.skills?.find(entry => entry.name === name && entry.status === 'customized');
             if (!skill) throw new Error('Check repositories again before syncing.');
             return { name, trees: skill.trees };
           });
         }
+        // Each repository syncs from the template its scan used, even if settings changed since.
+        const scannedTemplates = new Map(request.map(item => [item.id, lastScan.repos.find(repo => repo.id === item.id).template?.id]));
+        syncTemplateFor = id => scannedTemplates.get(id) ?? templateOf(now, id);
       }
       if (kind === 'create') {
         if (typeof body.name !== 'string' || !/^[A-Za-z0-9._-]{1,100}$/.test(body.name) || /^\.+$/.test(body.name)) throw new Error('Use letters, digits, dot, dash, or underscore for the repository name.');
@@ -160,13 +174,15 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
             catch (error) { active.results = error.results ?? null; throw error; }
           } else if (kind === 'sync-lock') {
             // A pull request that opened but did not merge keeps its link, as a failed sync does.
-            try { active.results = [await lockSkill({ root, ...request, skip, onOutput: output })]; }
+            try { active.results = [await lockSkill({ root, ...request, skip, templates: templateIds(now), onOutput: output })]; }
             catch (error) { active.results = error.branch ? [{ id: request.id, result: 'failed', branch: error.branch, ...(error.url && { url: error.url }) }] : null; throw error; }
           } else if (kind === 'sync') {
-            try { active.results = await sync({ root, selection: request, skip, onOutput: output }); }
+            try { active.results = await sync({ root, selection: request, skip, ...templateOptions(now), templateFor: syncTemplateFor, onOutput: output }); }
             catch (error) { active.results = error.results ?? null; throw error; }
           } else if (kind === 'create') {
-            const result = await create({ root, ...request, catalog: await loadSkills(), onOutput: output });
+            // Created from the template the skill list came from, so the choices always match it.
+            const catalogNow = await loadSkills();
+            const result = await create({ root, ...request, template: catalogNow.template ?? settings.defaultTemplate, catalog: catalogNow, onOutput: output });
             active.destination = result.destination; active.remoteUrl = result.remoteUrl; active.disabledSkills = result.disabledSkills;
           } else if (kind === 'update') {
             active.destination = await update({ root, id: body.id, onOutput: output });

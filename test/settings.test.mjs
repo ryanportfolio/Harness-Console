@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createApp } from '../server.mjs';
-import { defaults, loadSettings, pausedList, saveSettings, settingsDir } from '../settings.mjs';
+import { defaults, loadSettings, pausedList, saveSettings, settingsDir, templateIds, templateOf } from '../settings.mjs';
 
 const temp = async t => { const dir = await mkdtemp(path.join(tmpdir(), 'harness-settings-')); t.after(() => rm(dir, { recursive: true, force: true })); return dir; };
 const json = data => `${JSON.stringify(data, null, 2)}\n`;
@@ -77,6 +77,15 @@ test('saving validates first and replaces the file whole', async t => {
   assert.equal(JSON.parse(await readFile(file, 'utf8')).lastSelected, 'owner/one');
 });
 
+test('a project template is found under either of its names, else the default applies', () => {
+  const settings = { ...defaults(), defaultTemplate: 'me/base', projects: { 'Owner/New-Name': { template: 'me/special' }, 'owner/paused': { paused: 'x' } } };
+  assert.equal(templateOf(settings, 'owner/old-name', 'owner/new-name'), 'me/special');
+  assert.equal(templateOf(settings, 'owner/new-name'), 'me/special');
+  assert.equal(templateOf(settings, 'owner/old-name', undefined), 'me/base');
+  assert.equal(templateOf(settings, 'owner/paused'), 'me/base');
+  assert.deepEqual(templateIds(settings), ['me/base', 'me/special']);
+});
+
 test('a pause with a blank reason still pauses', () => {
   assert.deepEqual(pausedList({ ...defaults(), projects: { 'owner/a': { paused: ' ' }, 'owner/b': { paused: 'Frozen' }, 'owner/c': {} } }), [{ repo: 'owner/a', reason: 'Updates paused' }, { repo: 'owner/b', reason: 'Frozen' }]);
 });
@@ -99,7 +108,25 @@ test('the server takes its workspace and paused projects from the settings file'
   assert.equal(state.root, workspace);
   assert.equal(state.settingsError, null);
   assert.equal((await call('sync')).status, 200);
-  assert.deepEqual(seen, [{ root: workspace, skip: [{ repo: 'owner/frozen', reason: 'Frozen job take-home' }] }]);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].root, workspace);
+  assert.deepEqual(seen[0].skip, [{ repo: 'owner/frozen', reason: 'Frozen job take-home' }]);
+});
+
+test('each project syncs from its own template, the default otherwise, with caches beside the settings', async t => {
+  const dir = await temp(t), file = path.join(dir, 'settings.json'), workspace = path.join(dir, 'work');
+  await saveSettings(file, { ...defaults(), workspace, defaultTemplate: 'me/base', projects: { 'me/special': { template: 'me/other-template' } } });
+  const seen = [];
+  const { state, call } = await start(t, { settingsFile: file, legacy: null, scan: async args => { seen.push(args); return { template: { id: 'me/base', head: 'abc' }, repos: [] }; } });
+  assert.equal(state.defaultTemplate, 'me/base');
+  await call('sync');
+  const [args] = seen;
+  assert.equal(args.defaultTemplate, 'me/base');
+  assert.equal(args.templateFor('Me/Special'), 'me/other-template');
+  assert.equal(args.templateFor('me/plain'), 'me/base');
+  assert.deepEqual(args.templates, ['me/base', 'me/other-template']);
+  assert.equal(args.cacheDir, dir);
+  await assert.rejects(saveSettings(file, { ...defaults(), projects: { 'me/x': { template: 'not a repo' } } }), /"template" must be owner\/name/);
 });
 
 test('a broken settings file refuses every sync and lock and is never overwritten', async t => {
@@ -147,6 +174,25 @@ test('a settings file broken while the app runs stops syncs and is not rewritten
   for (let i = 0; i < 50 && (job = (await call('job')).body.job).status === 'running'; i++) await new Promise(resolve => setTimeout(resolve, 20));
   assert.match(job.log, /Could not save the selection/);
   assert.equal(await readFile(file, 'utf8'), '{ broken');
+});
+
+test('a create uses the template its skill list came from, even after the default changes', async t => {
+  const dir = await temp(t), file = path.join(dir, 'settings.json'), workspace = path.join(dir, 'work');
+  await saveSettings(file, { ...defaults(), workspace, defaultTemplate: 'me/a' });
+  const created = [];
+  const { call } = await start(t, {
+    settingsFile: file, legacy: null,
+    catalog: async ({ template }) => ({ template, groups: [], skills: [] }),
+    clone: async ({ id }) => path.join(workspace, id.split('/')[1]),
+    create: async ({ name, template, catalog }) => { created.push({ template, listed: catalog.template }); return { destination: path.join(workspace, name), remoteUrl: '', disabledSkills: [] }; },
+  });
+  const settle = async () => { for (let i = 0; i < 50 && (await call('job')).body.job?.status === 'running'; i++) await new Promise(resolve => setTimeout(resolve, 20)); };
+  assert.equal((await call('skills')).body.template, 'me/a');
+  // The default moves to me/b in the file; a clone's save brings that into the running app.
+  await saveSettings(file, { ...defaults(), workspace, defaultTemplate: 'me/b' });
+  await call('repos'); await call('clone', { id: 'owner/repo' }); await settle();
+  assert.equal((await call('create', { name: 'fresh' })).status, 202); await settle();
+  assert.deepEqual(created, [{ template: 'me/a', listed: 'me/a' }]);
 });
 
 test('with no workspace the server asks for one instead of using a default folder', async t => {

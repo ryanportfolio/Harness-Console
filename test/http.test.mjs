@@ -146,8 +146,13 @@ test('sync route pins a replacement to the scanned trees and refuses skills that
   const json = async (route, body) => { const response = await fetch(`${origin}${route}`, body === undefined ? {} : { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', 'X-CoreWise-Token': token }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() }; };
   const { token } = (await json('/api/status')).body;
   await json('/api/sync');
-  assert.equal((await json('/api/sync', { repos: [{ id: 'owner/project', replace: ['alpha'] }] })).status, 400);
-  assert.equal((await json('/api/sync', { repos: [{ id: 'owner/project', replace: ['beta'] }] })).status, 202);
+  assert.equal((await json('/api/sync', { repos: [{ id: 'owner/project', template: 'abc', replace: ['alpha'] }] })).status, 400);
+  // A page shown a different template head (another tab scanned since) is refused before anything runs.
+  for (const template of [undefined, 'old']) {
+    const stale = await json('/api/sync', { repos: [{ id: 'owner/project', template, replace: ['beta'] }] });
+    assert.equal(stale.status, 400); assert.equal(stale.body.error, 'Check repositories again before syncing.');
+  }
+  assert.equal((await json('/api/sync', { repos: [{ id: 'owner/project', template: 'abc', replace: ['beta'] }] })).status, 202);
   await new Promise(resolve => setTimeout(resolve, 50));
   assert.deepEqual(synced, [[{ id: 'owner/project', apply: [], remove: [], replace: [{ name: 'beta', trees: 't1:-' }] }]]);
 });
@@ -172,7 +177,7 @@ test('sync route refuses a repository the scan skipped or could not check', asyn
   const { token } = (await json('/api/status')).body;
   await json('/api/sync');
   for (const [id, message] of [['owner/frozen', /Skipped: Frozen job take-home/], ['owner/old', /Skipped: Archived on GitHub/], ['owner/unknown', /Could not check the repository on GitHub/]]) {
-    const refused = await json('/api/sync', { repos: [{ id, apply: ['alpha'] }, { id: 'owner/project', apply: ['alpha'] }] });
+    const refused = await json('/api/sync', { repos: [{ id, template: 'abc', apply: ['alpha'] }, { id: 'owner/project', template: 'abc', apply: ['alpha'] }] });
     assert.equal(refused.status, 400); assert.match(refused.body.error, message);
   }
   assert.deepEqual(synced, []);
@@ -182,7 +187,7 @@ test('sync compare route reads only a scanned repository and skill at the scanne
   const compared = [];
   const server = await createApp({
     adapter: { account: async () => ({ connected: true, login: 'fixture' }) },
-    scan: async () => ({ template: { head: 'abc' }, repos: [{ id: 'owner/project', name: 'project', folder: 'C:/CoreWise/project', head: 'def', skills: [{ name: 'alpha', status: 'behind' }, { name: 'off', status: 'off' }] }] }),
+    scan: async () => ({ template: { id: 'owner/template', head: 'abc' }, repos: [{ id: 'owner/project', name: 'project', folder: 'C:/CoreWise/project', head: 'def', skills: [{ name: 'alpha', status: 'behind' }, { name: 'off', status: 'off' }] }] }),
     compareSync: async args => { compared.push(args); return 'diff text'; },
     storySync: async () => { throw new Error('no history'); },
     settingsFile: null, root: 'C:/CoreWise',
@@ -195,7 +200,7 @@ test('sync compare route reads only a scanned repository and skill at the scanne
   await get('/api/sync');
   for (const query of ['id=owner/other&name=alpha&rev=def&template=abc', 'id=owner/project&name=beta&rev=def&template=abc', 'id=owner/project&name=off&rev=def&template=abc', 'id=owner/project&name=alpha&rev=old&template=abc', 'id=owner/project&name=alpha&rev=def&template=old', 'id=owner/project&name=alpha']) assert.equal((await get(`/api/sync/compare?${query}`)).status, 404, query);
   assert.deepEqual((await get('/api/sync/compare?id=owner/project&name=alpha&rev=def&template=abc')).body, { name: 'alpha', diff: 'diff text', story: null });
-  assert.deepEqual(compared, [{ folder: 'C:/CoreWise/project', rev: 'def', name: 'alpha', templateHead: 'abc' }]);
+  assert.deepEqual(compared, [{ folder: 'C:/CoreWise/project', rev: 'def', name: 'alpha', templateHead: 'abc', templateId: 'owner/template' }]);
 });
 
 test('DSH routes preview without file bytes and install only skills from that preview', async t => {
