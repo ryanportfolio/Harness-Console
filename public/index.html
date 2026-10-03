@@ -20,7 +20,7 @@
       </form>
       <div class="fallback" id="newFallback" hidden>
         <button class="action go" id="connectButton" type="button"><span>Connect GitHub</span><span>-&gt;</span></button>
-        <a class="text-link" href="https://github.com/ryanportfolio/Harness-Firmware/generate" target="_blank" rel="noreferrer">Use GitHub template instead</a>
+        <a class="text-link" id="templateGenerate" target="_blank" rel="noreferrer">Use GitHub template instead</a>
       </div>
       <div class="success" id="newSuccess" hidden>
         <p>PROJECT READY</p>
@@ -28,7 +28,7 @@
         <p class="success-summary" id="successSummary"></p>
         <ol class="next-steps" aria-label="Next steps">
           <li><span class="step-number">01</span><span class="step-copy">Add your framework or first project files</span></li>
-          <li><span class="step-number">02</span><span class="step-copy">Run <a class="skill-ref" href="https://github.com/ryanportfolio/Harness-Firmware/blob/main/.claude/skills/init-project/SKILL.md" target="_blank" rel="noreferrer">init-project</a> so it can detect the stack</span></li>
+          <li><span class="step-number">02</span><span class="step-copy">Run <a class="skill-ref" id="templateInit" target="_blank" rel="noreferrer">init-project</a> so it can detect the stack</span></li>
         </ol>
         <div class="success-actions">
           <a class="action go" id="successLink" href="#" target="_blank" rel="noreferrer"><span>Open on GitHub</span><span>-&gt;</span></a>
@@ -42,7 +42,7 @@
   </section>
 </div>
 <div id="syncView" role="tabpanel" hidden>
-  <div class="sync-head"><div><div class="eyebrow" id="syncTemplate">Harness-Firmware main</div><h1>Skill sync</h1></div><button id="syncScan" class="primary" type="button">Check repositories <span>↻</span></button></div>
+  <div class="sync-head"><div><div class="eyebrow" id="syncTemplate">Template main</div><h1>Skill sync</h1></div><button id="syncScan" class="primary" type="button">Check repositories <span>↻</span></button></div>
   <p id="syncNote" class="sync-note">Compares each Harness repository cloned in your CoreWise folder with the template on GitHub. Skills edited in that repository stay as they are unless you choose to replace them with the template copy. Each repository gets a pull request from a new branch after its own checks run, merged into main straight away; your local folders are not touched. Repositories in the skip list or archived on GitHub are listed but never changed.</p>
   <div id="syncTools" class="sync-tools" hidden><button id="syncSelectAll" class="quiet" type="button">Select all updates, additions and edited</button><button id="syncClearAll" class="quiet" type="button">Unselect all</button></div>
   <div id="syncRepos"></div>

@@ -56,6 +56,9 @@ async function refresh() {
   notice(); $('refresh').disabled = true;
   try {
     const state = await api('status'); token = state.token; root = state.root; account = state; renderConnection();
+    // Links into the chosen template on GitHub; the id is owner/name, each part encoded.
+    const templateUrl = `https://github.com/${state.defaultTemplate.split('/').map(encodeURIComponent).join('/')}`;
+    $('templateGenerate').href = `${templateUrl}/generate`; $('templateInit').href = `${templateUrl}/blob/main/.claude/skills/init-project/SKILL.md`;
     const build = state.build; $('build').textContent = !build ? '' : build.note ? `Build ${build.head ?? 'unknown'}. ${build.note}` : `Build ${build.head}, up to date with GitHub`;
     $('account').textContent = state.connected ? state.login : state.needsLogin === false ? 'GitHub unavailable' : 'Connect GitHub'; $('accountHint').textContent = state.connected ? 'GitHub connected' : state.needsLogin === false ? 'Check connection and refresh' : 'Use your GitHub account'; $('login').hidden = state.connected || state.needsLogin === false;
     if (!state.connected) { repos = []; list(); notice(state.error || 'Sign in to browse your public and private repositories.'); return; }
@@ -247,7 +250,7 @@ async function scanSync() {
   if (sync.scanning) return;
   sync.scanned = true; sync.scanning = true; sync.armed = false; renderSyncFoot();
   $('syncScan').disabled = true; $('syncScan').firstChild.textContent = 'Checking repositories ';
-  try { sync.data = await api('sync'); $('syncTemplate').textContent = `Harness-Firmware main ${sync.data.template.head.slice(0, 7)}`; renderSync(); }
+  try { sync.data = await api('sync'); $('syncTemplate').textContent = `${sync.data.template.id.split('/')[1]} main ${sync.data.template.head.slice(0, 7)}`; renderSync(); }
   catch (error) { sync.data = null; $('syncTools').hidden = true; const p = document.createElement('p'); p.className = 'sync-current'; p.textContent = error.message; $('syncRepos').replaceChildren(p); }
   finally { sync.scanning = false; $('syncScan').disabled = busy; $('syncScan').firstChild.textContent = 'Check repositories '; renderSyncFoot(); }
 }
@@ -392,7 +395,7 @@ async function compareSync(repo, skill) {
   const request = ++compareRequest;
   $('syncCompareTitle').textContent = `${skill.name}: ${repo.name} and Harness-Firmware`;
   $('syncStory').replaceChildren(); $('syncDiff').textContent = 'Loading…'; if (!$('syncCompare').open) $('syncCompare').showModal();
-  const query = new URLSearchParams({ id: repo.id, name: skill.name, rev: repo.head, template: sync.data.template.head });
+  const query = new URLSearchParams({ id: repo.id, name: skill.name, rev: repo.head, template: (repo.template ?? sync.data.template).head });
   let result; try { result = await api(`sync/compare?${query}`); } catch (error) { if (request === compareRequest) $('syncDiff').textContent = error.message; return; }
   if (request !== compareRequest) return;
   renderStory(repo, skill, result.story); renderDiff(repo, skill, result.story, result.diff);

@@ -99,7 +99,25 @@ test('the server takes its workspace and paused projects from the settings file'
   assert.equal(state.root, workspace);
   assert.equal(state.settingsError, null);
   assert.equal((await call('sync')).status, 200);
-  assert.deepEqual(seen, [{ root: workspace, skip: [{ repo: 'owner/frozen', reason: 'Frozen job take-home' }] }]);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].root, workspace);
+  assert.deepEqual(seen[0].skip, [{ repo: 'owner/frozen', reason: 'Frozen job take-home' }]);
+});
+
+test('each project syncs from its own template, the default otherwise, with caches beside the settings', async t => {
+  const dir = await temp(t), file = path.join(dir, 'settings.json'), workspace = path.join(dir, 'work');
+  await saveSettings(file, { ...defaults(), workspace, defaultTemplate: 'me/base', projects: { 'me/special': { template: 'me/other-template' } } });
+  const seen = [];
+  const { state, call } = await start(t, { settingsFile: file, legacy: null, scan: async args => { seen.push(args); return { template: { id: 'me/base', head: 'abc' }, repos: [] }; } });
+  assert.equal(state.defaultTemplate, 'me/base');
+  await call('sync');
+  const [args] = seen;
+  assert.equal(args.defaultTemplate, 'me/base');
+  assert.equal(args.templateFor('Me/Special'), 'me/other-template');
+  assert.equal(args.templateFor('me/plain'), 'me/base');
+  assert.deepEqual(args.templates, ['me/base', 'me/other-template']);
+  assert.equal(args.cacheDir, dir);
+  await assert.rejects(saveSettings(file, { ...defaults(), projects: { 'me/x': { template: 'not a repo' } } }), /"template" must be owner\/name/);
 });
 
 test('a broken settings file refuses every sync and lock and is never overwritten', async t => {

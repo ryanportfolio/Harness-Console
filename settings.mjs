@@ -1,14 +1,15 @@
 import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { TEMPLATE } from './harness.mjs';
+import { DEFAULT_TEMPLATE } from './harness.mjs';
 import { readSkipList, SKIP_FILE } from './sync.mjs';
 
 // One settings file per user, in the OS app-data folder. It holds no credentials, so it can later be
 // synced to an account as it is. Shape (version 1):
 //   workspace        folder the clones live in, or null until the user picks one
 //   defaultTemplate  owner/name of the template new projects start from
-//   projects         { "owner/name": { paused: "reason" } }: a paused project is never written by a sync
+//   projects         { "owner/name": { paused: "reason", template: "owner/name" } }: a paused project is
+//                    never written by a sync; template overrides defaultTemplate for that project
 //   lastSelected     owner/name of the repository last cloned, or null
 export const APP_NAME = 'Harness Firmware';
 
@@ -24,7 +25,7 @@ export const settingsFile = options => path.join(settingsDir(options), 'settings
 export const legacyPaths = ({ home = homedir() } = {}) => ({ dir: path.join(home, '.corewise-cloner'), preferences: path.join(home, '.corewise-cloner', 'preferences.json'), root: path.join(home, 'CoreWise'), skip: SKIP_FILE });
 
 const REPO = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
-export const defaults = () => ({ version: 1, workspace: null, defaultTemplate: TEMPLATE, projects: {}, lastSelected: null });
+export const defaults = () => ({ version: 1, workspace: null, defaultTemplate: DEFAULT_TEMPLATE, projects: {}, lastSelected: null });
 
 export function validateSettings(data, label = 'settings') {
   const fail = detail => { throw new Error(`${label}: ${detail}`); };
@@ -36,6 +37,7 @@ export function validateSettings(data, label = 'settings') {
     if (!REPO.test(id)) fail(`project ${JSON.stringify(id)} is not owner/name`);
     if (!project || typeof project !== 'object' || Array.isArray(project)) fail(`project ${id} must be an object`);
     if (project.paused !== undefined && typeof project.paused !== 'string') fail(`project ${id}: "paused" must be a reason, or left out`);
+    if (project.template !== undefined && (typeof project.template !== 'string' || !REPO.test(project.template))) fail(`project ${id}: "template" must be owner/name, or left out`);
   }
   if (data.lastSelected !== null && (typeof data.lastSelected !== 'string' || !REPO.test(data.lastSelected))) fail('"lastSelected" must be owner/name or null');
   return data;
@@ -88,6 +90,11 @@ export async function loadSettings({ file = settingsFile(), legacy = legacyPaths
   await saveSettings(file, settings);
   return { settings, migrated };
 }
+
+// The template a project syncs from: its own, else the default. templateIds lists every template in
+// use, so their clones are never treated as projects.
+export const templateOf = (settings, id) => Object.entries(settings.projects).find(([key]) => key.toLowerCase() === String(id).toLowerCase())?.[1].template ?? settings.defaultTemplate;
+export const templateIds = settings => [...new Set([settings.defaultTemplate, ...Object.values(settings.projects).map(project => project.template).filter(Boolean)])];
 
 // The paused projects as the skip list sync.mjs reads: [{ repo, reason }]. A pause with no reason
 // still pauses; skipReason tells "not listed" (null) apart from any reason.

@@ -1,7 +1,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { run } from '../core.mjs';
@@ -102,6 +102,34 @@ test('scan classifies each skill against the template history', async t => {
   assert.equal(repo.id, 'owner/project');
   assert.deepEqual(statuses(repo), { alpha: 'behind', beta: 'customized', delta: 'new', epsilon: 'off', gamma: 'removed' });
   assert.deepEqual(repo.skills.find(skill => skill.name === 'beta').files, { changed: ['SKILL.md'], added: [], missing: [] });
+});
+
+test('each clone is compared with its own template, cached per template, and template clones are left out', async t => {
+  const data = await fixture(t);
+  // A second template still at v1: against it alpha and gamma are current, against the default they are not.
+  const other = path.join(data.temp, 'other');
+  await run('git', ['clone', '-q', path.join(data.temp, 'template'), other]);
+  await run('git', ['-C', other, 'reset', '-q', '--hard', 'HEAD~1']);
+  // Template caches clone https://github.com/<id>.git; point both ids at the local repositories.
+  const saved = Object.fromEntries(['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_CONFIG_KEY_1', 'GIT_CONFIG_VALUE_1'].map(key => [key, process.env[key]]));
+  t.after(() => { for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; });
+  Object.assign(process.env, {
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: `url.${path.join(data.temp, 'template').replaceAll('\\', '/')}.insteadOf`, GIT_CONFIG_VALUE_0: 'https://github.com/me/base.git',
+    GIT_CONFIG_KEY_1: `url.${other.replaceAll('\\', '/')}.insteadOf`, GIT_CONFIG_VALUE_1: 'https://github.com/me/other.git',
+  });
+  const cacheDir = path.join(data.temp, 'app-data');
+  const result = await scanSkills({ root: data.root, execute: data.execute, defaultTemplate: 'me/base', templateFor: id => id === 'owner/project' ? 'me/other' : 'me/base', templates: ['me/other'], cacheDir });
+  assert.equal(result.template.id, 'me/base');
+  const [repo] = result.repos;
+  assert.equal(repo.template.id, 'me/other');
+  assert.notEqual(repo.template.head, result.template.head);
+  assert.deepEqual(statuses(repo), { alpha: 'same', beta: 'customized', gamma: 'same' });
+  assert.ok(await stat(path.join(cacheDir, 'templates', 'me__base.git', 'HEAD')));
+  assert.ok(await stat(path.join(cacheDir, 'templates', 'me__other.git', 'HEAD')));
+  // A clone of a template in use is never a project.
+  const excluded = await scanSkills({ root: data.root, execute: data.execute, defaultTemplate: 'me/base', templates: ['owner/project'], cacheDir });
+  assert.deepEqual(excluded.repos, []);
 });
 
 test('compare diffs the scanned main copy against the template copy a sync would write', async t => {

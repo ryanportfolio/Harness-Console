@@ -182,7 +182,7 @@ test('sync compare route reads only a scanned repository and skill at the scanne
   const compared = [];
   const server = await createApp({
     adapter: { account: async () => ({ connected: true, login: 'fixture' }) },
-    scan: async () => ({ template: { head: 'abc' }, repos: [{ id: 'owner/project', name: 'project', folder: 'C:/CoreWise/project', head: 'def', skills: [{ name: 'alpha', status: 'behind' }, { name: 'off', status: 'off' }] }] }),
+    scan: async () => ({ template: { id: 'owner/template', head: 'abc' }, repos: [{ id: 'owner/project', name: 'project', folder: 'C:/CoreWise/project', head: 'def', skills: [{ name: 'alpha', status: 'behind' }, { name: 'off', status: 'off' }] }] }),
     compareSync: async args => { compared.push(args); return 'diff text'; },
     storySync: async () => { throw new Error('no history'); },
     settingsFile: null, root: 'C:/CoreWise',
@@ -195,7 +195,7 @@ test('sync compare route reads only a scanned repository and skill at the scanne
   await get('/api/sync');
   for (const query of ['id=owner/other&name=alpha&rev=def&template=abc', 'id=owner/project&name=beta&rev=def&template=abc', 'id=owner/project&name=off&rev=def&template=abc', 'id=owner/project&name=alpha&rev=old&template=abc', 'id=owner/project&name=alpha&rev=def&template=old', 'id=owner/project&name=alpha']) assert.equal((await get(`/api/sync/compare?${query}`)).status, 404, query);
   assert.deepEqual((await get('/api/sync/compare?id=owner/project&name=alpha&rev=def&template=abc')).body, { name: 'alpha', diff: 'diff text', story: null });
-  assert.deepEqual(compared, [{ folder: 'C:/CoreWise/project', rev: 'def', name: 'alpha', templateHead: 'abc' }]);
+  assert.deepEqual(compared, [{ folder: 'C:/CoreWise/project', rev: 'def', name: 'alpha', templateHead: 'abc', templateId: 'owner/template' }]);
 });
 
 test('DSH routes preview without file bytes and install only skills from that preview', async t => {
