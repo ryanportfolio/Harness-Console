@@ -618,6 +618,10 @@ async function applyRepo({ template, clone, skipList, apply, remove, replace, ex
     // conflict with a newer main) leaves the pull request open and fails this repository.
     try { await execute('gh', ['pr', 'merge', url, '--squash'], { cwd: worktree }); }
     catch (error) { throw Object.assign(new Error(`Opened ${url}, but could not merge it: ${reason(error)}. Merge it on GitHub by hand.`), { branch, url }); }
+    // On a branch with a merge queue, gh pr merge can succeed by queueing the pull request or turning on
+    // auto-merge. The branch is deleted only once GitHub reports the pull request merged.
+    const state = (await execute('gh', ['pr', 'view', url, '--json', 'state', '--jq', '.state'], { cwd: worktree }).catch(() => '')).trim();
+    if (state !== 'MERGED') throw Object.assign(new Error(`Opened ${url}; GitHub queued it instead of merging (state ${state || 'unknown'}). It merges when its checks pass; the branch stays until then.`), { branch, url });
     await git([...GIT_CRED, 'push', '--quiet', 'origin', '--delete', branch]).catch(() => say(`merged, but could not delete branch ${branch}`));
     say(`merged ${url} (${changes.join('; ')})`);
     return { id: clone.id, result: 'merged', commit, branch, url };

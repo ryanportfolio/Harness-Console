@@ -23,7 +23,7 @@ const json = value => `${JSON.stringify(value, null, 2)}\n`;
 // merge (onMerge moves main on the local remote), and fails on anything else. Git pushes and fetches are recorded too, so a test can prove none targets
 // main and a skipped clone is never fetched.
 function fakeGitHub() {
-  const gh = { calls: [], pushes: [], fetches: [], archived: false, fail: null, prFail: null, mergeFail: null, head: null, onMerge: async () => {}, name: 'owner/project', branch: 'main', pr: 'https://github.com/owner/project/pull/7' };
+  const gh = { calls: [], pushes: [], fetches: [], archived: false, fail: null, prFail: null, mergeFail: null, queued: false, merged: false, head: null, onMerge: async () => {}, name: 'owner/project', branch: 'main', pr: 'https://github.com/owner/project/pull/7' };
   gh.execute = async (command, args, options) => {
     if (command === 'git' && args.includes('push')) gh.pushes.push(args);
     if (command === 'git' && args.includes('fetch')) gh.fetches.push(args);
@@ -32,7 +32,8 @@ function fakeGitHub() {
     if (gh.fail) throw new Error(gh.fail);
     if (args[0] === 'api') return `${JSON.stringify({ archived: gh.archived, name: gh.name, branch: gh.branch })}\n`;
     if (args[0] === 'pr' && args[1] === 'create') { if (gh.prFail) throw new Error(gh.prFail); gh.head = args[args.indexOf('--head') + 1]; return `${gh.pr}\n`; }
-    if (args[0] === 'pr' && args[1] === 'merge') { if (gh.mergeFail) throw new Error(gh.mergeFail); await gh.onMerge(gh.head); return ''; }
+    if (args[0] === 'pr' && args[1] === 'merge') { if (gh.mergeFail) throw new Error(gh.mergeFail); gh.merged = !gh.queued; if (gh.merged) await gh.onMerge(gh.head); return ''; }
+    if (args[0] === 'pr' && args[1] === 'view') return `${gh.merged ? 'MERGED' : 'OPEN'}\n`;
     throw new Error(`unexpected gh call: ${args.join(' ')}`);
   };
   return gh;
@@ -179,10 +180,11 @@ test('apply merges a pull request from a new branch, deletes the branch and leav
   assert.deepEqual(JSON.parse(await show('.agents/skill-modes.json')).skills, { alpha: 'native', delta: 'native' });
   assert.match(await run('git', ['--git-dir', data.remote, 'log', '-1', '--format=%B', outcome.commit]), /^Sync skills from Harness-Firmware\n\nUpdated: alpha\nAdded: delta\nTemplate: /);
   // One pull request: this repository, into main, from the new branch, with the changes and checks, then squash-merged.
-  const [create, merged] = prCalls(data);
-  assert.equal(prCalls(data).length, 2);
+  const [create, merged, view] = prCalls(data);
+  assert.equal(prCalls(data).length, 3);
   assert.deepEqual(create.slice(0, 2), ['pr', 'create']);
   assert.deepEqual(merged, ['pr', 'merge', data.gh.pr, '--squash']);
+  assert.deepEqual(view.slice(0, 3), ['pr', 'view', data.gh.pr]);
   assert.equal(flag(create, '--repo'), 'owner/project'); assert.equal(flag(create, '--base'), 'main'); assert.equal(flag(create, '--head'), branch);
   assert.equal(flag(create, '--title'), 'Sync skills from Harness-Firmware');
   const body = flag(create, '--body');
@@ -202,7 +204,7 @@ test('apply merges a pull request from a new branch, deletes the branch and leav
   assert.equal(removal.result, 'merged');
   assert.equal(removal.branch, `${branch}-2`);
   assert.equal(await revOf(data, branch), outcome.commit);
-  assert.equal(flag(prCalls(data)[2], '--head'), `${branch}-2`);
+  assert.equal(flag(prCalls(data)[3], '--head'), `${branch}-2`);
   await assert.rejects(shows(data, removal.commit)('.claude/skills/gamma/SKILL.md'));
   assert.equal(await revOf(data, 'main'), removal.commit);
 });
@@ -364,6 +366,14 @@ test('a pull request GitHub refuses to merge stays open with its branch, and mai
   assert.equal(result.error, `Opened ${data.gh.pr}, but could not merge it: Pull request is not mergeable: base branch policy prohibits the merge. Merge it on GitHub by hand.`);
   assert.deepEqual(await syncBranches(data), [`refs/heads/${result.branch}`]);
   assert.equal(await revOf(data, 'main'), main);
+
+  // A merge queue: gh pr merge succeeds but only queues the pull request, so the branch stays.
+  const queued = await fixture(t);
+  queued.gh.queued = true;
+  const waiting = (await applySkills({ root: queued.root, execute: queued.execute, template: await queued.opened(), selection: [{ id: 'owner/project', apply: ['alpha'] }] }).catch(error => error)).results[0];
+  assert.equal(waiting.result, 'failed'); assert.equal(waiting.url, queued.gh.pr);
+  assert.match(waiting.error, /GitHub queued it instead of merging \(state OPEN\)/);
+  assert.deepEqual(await syncBranches(queued), [`refs/heads/${waiting.branch}`]);
 });
 
 test('the committed skip list names the frozen repositories', async () => {
