@@ -102,7 +102,7 @@ Installs skills from the Harness-Firmware clone at \`~/CoreWise/Harness-Firmware
 
 The \`CoreWise\` and \`.corewise-cloner\` names come from the app's earlier name and are kept so existing clones and state carry over. GitHub credentials stay with the GitHub CLI.
 
-The app accepts requests only for its exact loopback host and browser origin, and every change needs a per-session token. Clone URLs are built from repository identities the GitHub API returned; the browser cannot supply a URL or a command. Git and \`gh\` run with argument arrays and no shell.
+The app accepts requests only for its exact loopback host and browser origin, and every change needs a per-session token. Clone URLs are built from repository identities the GitHub API returned; the browser cannot supply a URL or a command. Git and \`gh\` run with argument arrays and no shell. The tracker answers only \`127.0.0.1\` or \`localhost\` on its own port, and its two changes, **Refresh now** and **Sign in again**, need a same-origin request with a custom header, so another website cannot trigger them.
 
 ## Tests
 

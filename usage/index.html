@@ -240,16 +240,16 @@
   document.addEventListener("click", async (e) => {
     const b = e.target.closest("button.login"); if (!b) return;
     b.disabled = true;
-    const r = await fetch(`/api/login?account=${encodeURIComponent(b.dataset.account)}`, { method: "POST" });
+    const r = await fetch(`/api/login?account=${encodeURIComponent(b.dataset.account)}`, { method: "POST", headers: { "X-Usage-Request": "1" } });
     b.replaceWith(Object.assign(document.createElement("span"), { className: "notes", textContent: r.ok ? "A console window opened. Finish the browser sign-in there, then press Refresh now." : `Could not open the sign-in window (${r.status}).` }));
   });
   $("#refresh").addEventListener("click", async () => {
     $("#refresh").disabled = true;
-    try { await fetch("/api/refresh", { method: "POST" }); await load(); } finally { $("#refresh").disabled = false; }
+    try { await fetch("/api/refresh", { method: "POST", headers: { "X-Usage-Request": "1" } }); await load(); } finally { $("#refresh").disabled = false; }
   });
   // A page load acts like "Refresh now": show the cached snapshot at once, then pull fresh numbers.
   // The server skips accounts fetched within the last few minutes, so reloads cannot trip the 429 backoff.
-  load().then(() => fetch("/api/refresh", { method: "POST" })).then(load).catch(() => {});
+  load().then(() => fetch("/api/refresh", { method: "POST", headers: { "X-Usage-Request": "1" } })).then(load).catch(() => {});
   setInterval(load, 30_000);
   setInterval(render, 15_000); // keep countdowns moving between fetches
 </script>

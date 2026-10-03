@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TokenScanner } from "./tokens.mjs";
 import { Pricing } from "./pricing.mjs";
+import { localRequest } from "./guard.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const execP = promisify(exec);
@@ -445,6 +446,9 @@ function mergeSummaries(kind, parts) {
 const indexHtml = await readFile(path.join(here, "index.html"), "utf8");
 
 createServer((req, res) => {
+  // Only loopback pages (the Harness Console on any port) may frame the tracker.
+  res.setHeader("content-security-policy", "frame-ancestors 'self' http://127.0.0.1:* http://localhost:*");
+  if (!localRequest(req, PORT)) { res.writeHead(403, { "content-type": "text/plain" }); res.end("local access only"); return; }
   const url = new URL(req.url, "http://127.0.0.1");
   if (url.pathname === "/api/usage") {
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
