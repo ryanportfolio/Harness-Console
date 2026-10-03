@@ -37,7 +37,7 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
   };
   // Template caches live beside the settings file; in-memory settings use sync.mjs's own default.
   const cacheDir = settingsFile ? path.dirname(settingsFile) : undefined;
-  const templateOptions = current => ({ defaultTemplate: current.defaultTemplate, templateFor: id => templateOf(current, id), templates: templateIds(current), cacheDir });
+  const templateOptions = current => ({ defaultTemplate: current.defaultTemplate, templateFor: (...ids) => templateOf(current, ...ids), templates: templateIds(current), cacheDir });
   // DSH installs read the local Harness-Firmware checkout; the preview keeps the rendered bytes,
   // so an install writes exactly what was shown.
   const dshSource = () => path.join(needRoot(), 'Harness-Firmware');
@@ -137,11 +137,15 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
       if (kind === 'sync') {
         request = normalizeSelection(body.repos);
         if (request.some(item => !lastScan?.repos.some(repo => repo.id === item.id))) throw new Error('Check repositories again before syncing.');
+        // The page names the template head it compared each repository against. A newer scan from
+        // another tab, with a different template or head, is refused rather than applied under old labels.
+        const shownTemplate = new Map(body.repos.map(item => [item.id, item.template]));
         // Replacing an edited copy is pinned to the folder trees this page was shown. A repository the
         // scan skipped (skip list, archived) or could not check is refused here too.
         for (const item of request) {
           const scanned = lastScan.repos.find(repo => repo.id === item.id);
           if (scanned.skipped || scanned.error) throw new Error(`${item.id} cannot be synced. ${scanned.skipped ? `Skipped: ${scanned.skipped}.` : scanned.error}`);
+          if (shownTemplate.get(item.id) !== (scanned.template ?? lastScan.template)?.head) throw new Error('Check repositories again before syncing.');
           item.replace = item.replace.map(name => {
             const skill = scanned.skills?.find(entry => entry.name === name && entry.status === 'customized');
             if (!skill) throw new Error('Check repositories again before syncing.');
@@ -176,7 +180,9 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
             try { active.results = await sync({ root, selection: request, skip, ...templateOptions(now), templateFor: syncTemplateFor, onOutput: output }); }
             catch (error) { active.results = error.results ?? null; throw error; }
           } else if (kind === 'create') {
-            const result = await create({ root, ...request, template: settings.defaultTemplate, catalog: await loadSkills(), onOutput: output });
+            // Created from the template the skill list came from, so the choices always match it.
+            const catalogNow = await loadSkills();
+            const result = await create({ root, ...request, template: catalogNow.template ?? settings.defaultTemplate, catalog: catalogNow, onOutput: output });
             active.destination = result.destination; active.remoteUrl = result.remoteUrl; active.disabledSkills = result.disabledSkills;
           } else if (kind === 'update') {
             active.destination = await update({ root, id: body.id, onOutput: output });

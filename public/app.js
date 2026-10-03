@@ -260,10 +260,13 @@ function syncRepoToggle(id) {
   const boxes = repoBoxes(id), on = boxes.filter(box => box.checked).length;
   toggle.checked = on > 0 && on === boxes.length; toggle.indeterminate = on > 0 && on < boxes.length;
 }
+// The template a repository syncs from (its own, else the scan's default), and its short name for labels.
+const repoTemplate = repo => repo.template ?? sync.data.template;
+const templateName = repo => repoTemplate(repo).id.split('/')[1];
 // A skill name opens the diff; inside a label a button click does not toggle the checkbox.
 function compareButton(repo, skill, extra = '') {
   const button = document.createElement('button'); button.type = 'button'; button.className = `sync-name ${extra}`.trim(); button.textContent = skill.name;
-  button.title = `Show how ${repo.name}'s copy differs from Harness-Firmware`; button.onclick = () => void compareSync(repo, skill); return button;
+  button.title = `Show how ${repo.name}'s copy differs from ${templateName(repo)}`; button.onclick = () => void compareSync(repo, skill); return button;
 }
 let compareRequest = 0;
 const el = (tag, className, ...children) => { const node = document.createElement(tag); if (className) node.className = className; node.append(...children.filter(child => child !== null && child !== undefined && child !== false)); return node; };
@@ -285,10 +288,10 @@ function storyVerdict(repo, skill) {
   return {
     behind: `${who} has an older template copy of ${name} and never edited it. A sync updates it to the newest template copy; nothing is lost.`,
     new: `${who} does not have ${name} yet. A sync adds the template copy.`,
-    removed: `Harness-Firmware no longer has ${name}. A sync deletes it from ${who}; the copy there was never edited.`,
-    'removed-edited': `Harness-Firmware no longer has ${name}, and ${who} edited its copy. The sync leaves it alone; this view is for reference.`,
+    removed: `${templateName(repo)} no longer has ${name}. A sync deletes it from ${who}; the copy there was never edited.`,
+    'removed-edited': `${templateName(repo)} no longer has ${name}, and ${who} edited its copy. The sync leaves it alone; this view is for reference.`,
     customized: `${who} changed ${name} after it last matched the template. A sync replaces ${who}'s copy with the template copy, so ${who}'s changes are lost.`,
-  }[skill.status] ?? `A sync writes the Harness-Firmware copy of ${name} to ${who}.`;
+  }[skill.status] ?? `A sync writes the ${templateName(repo)} copy of ${name} to ${who}.`;
 }
 function renderStory(repo, skill, story) {
   const box = $('syncStory'); box.replaceChildren(el('p', `compare-verdict${skill.status === 'customized' ? ' warn' : ''}`, storyVerdict(repo, skill)));
@@ -297,7 +300,7 @@ function renderStory(repo, skill, story) {
   box.append(el('div', 'compare-cards',
     storyCard(repo.id, repo.name, 'Now on main', story.repo, since(`made in ${repo.name}`)),
     el('div', 'compare-arrow', el('span', '', skill.status === 'locked' ? 'locked, sync skips' : 'a sync replaces'), el('span', '', '←')),
-    storyCard(story.template, 'Harness-Firmware', skill.status === 'locked' ? 'Template copy' : 'Template copy a sync writes', story.harness, since('made in the template'))));
+    storyCard(story.template, templateName(repo), skill.status === 'locked' ? 'Template copy' : 'Template copy a sync writes', story.harness, since('made in the template'))));
   const matched = story.base
     ? el('p', 'compare-base', 'Both copies last matched on ', el('b', '', shortDate(story.base.repo.date)), `, when ${repo.name} got commit `, commitLink(repo.id, story.base.repo), ` "${story.base.repo.subject}".`)
     : el('p', 'compare-base', `${repo.name}'s copy never matched a template version on record, so changes below are not credited to one side.`);
@@ -359,13 +362,13 @@ function renderDiff(repo, skill, story, diff) {
   const fallback = untouched ? 'harness' : story?.base?.harness && !story.harness.count ? 'repo' : 'unknown';
   const exact = untouched || fallback === 'repo';
   const { files, notes } = parseDiff(diff), who = repo.name, tally = { repo: 0, harness: 0, both: 0, unknown: 0 };
-  const LABELS = { repo: [`Changed in ${who}`, 'A sync undoes this change.'], harness: ['Newer in Harness-Firmware', 'A sync brings this in.'], both: ['Changed on both sides', `A sync keeps the Harness-Firmware version and drops ${who}'s.`], unknown: ['Differs', 'A sync writes the Harness-Firmware version.'] };
+  const LABELS = { repo: [`Changed in ${who}`, 'A sync undoes this change.'], harness: [`Newer in ${templateName(repo)}`, 'A sync brings this in.'], both: ['Changed on both sides', `A sync keeps the ${templateName(repo)} version and drops ${who}'s.`], unknown: ['Differs', `A sync writes the ${templateName(repo)} version.`] };
   // Both sides changed: credit each line by whether the shared copy had it. A repeated or moved line
   // can land on the wrong side, so the summary says the credit is estimated.
   const baseFor = path => exact || !story?.base?.harness || !/^\.(claude|agents)\/skills\//.test(path) ? null : new Set((story.baseFiles[path] ?? '').replace(/\r/g, '').split('\n'));
   const sections = files.map(file => {
     const base = baseFor(file.path), segments = file.path.split('/'), shortPath = segments.slice(3).join('/') || file.path;
-    const state = { added: `Only in Harness-Firmware${locked ? '' : ': a sync adds this file'}`, deleted: `Only in ${who}${locked ? '' : ': a sync deletes this file'}`, changed: 'In both, with differences' }[file.state];
+    const state = { added: `Only in ${templateName(repo)}${locked ? '' : ': a sync adds this file'}`, deleted: `Only in ${who}${locked ? '' : ': a sync deletes this file'}`, changed: 'In both, with differences' }[file.state];
     const section = el('section', 'compare-file', el('div', 'compare-file-head', el('b', '', shortPath), el('span', '', segments.slice(0, 3).join('/')), el('span', `compare-state ${file.state}`, state)));
     if (file.binary) section.append(el('p', 'compare-quiet', 'Binary file; contents not shown.'));
     for (const hunk of file.hunks) {
@@ -385,15 +388,15 @@ function renderDiff(repo, skill, story, diff) {
     return section;
   });
   const total = tally.repo + tally.harness + tally.both + tally.unknown;
-  const parts = [tally.repo && `${tally.repo} made in ${who}`, tally.harness && `${tally.harness} newer in Harness-Firmware`, tally.both && `${tally.both} changed on both sides`].filter(Boolean);
+  const parts = [tally.repo && `${tally.repo} made in ${who}`, tally.harness && `${tally.harness} newer in ${templateName(repo)}`, tally.both && `${tally.both} changed on both sides`].filter(Boolean);
   const summary = el('p', 'compare-summary', !files.length ? 'The two copies are identical.' : `${total} ${total === 1 ? 'difference' : 'differences'} in ${files.length} ${files.length === 1 ? 'file' : 'files'}${parts.length ? `: ${parts.join(', ')}` : ''}.${!exact && story?.base?.harness ? ' Both sides changed this skill, so each difference is credited by matching lines against the last shared copy; a moved or repeated line can be credited to the wrong side.' : ''}`);
-  const legend = el('div', 'compare-legend', el('span', 'key-repo', `Changed in ${who}`), el('span', 'key-harness', 'Newer in Harness-Firmware'), el('span', 'key-both', 'Both sides'), el('span', 'key-del', `Text in ${who} now`), el('span', 'key-add', locked ? 'Template text' : 'Text after a sync'));
+  const legend = el('div', 'compare-legend', el('span', 'key-repo', `Changed in ${who}`), el('span', 'key-harness', `Newer in ${templateName(repo)}`), el('span', 'key-both', 'Both sides'), el('span', 'key-del', `Text in ${who} now`), el('span', 'key-add', locked ? 'Template text' : 'Text after a sync'));
   const raw = el('details', 'compare-raw', el('summary', '', 'Raw diff'), el('pre', '', diff));
   $('syncDiff').replaceChildren(summary, legend, ...notes.map(note => el('p', 'compare-quiet', note)), ...sections, raw); $('syncCompare').scrollTop = 0;
 }
 async function compareSync(repo, skill) {
   const request = ++compareRequest;
-  $('syncCompareTitle').textContent = `${skill.name}: ${repo.name} and Harness-Firmware`;
+  $('syncCompareTitle').textContent = `${skill.name}: ${repo.name} and ${templateName(repo)}`;
   $('syncStory').replaceChildren(); $('syncDiff').textContent = 'Loading…'; if (!$('syncCompare').open) $('syncCompare').showModal();
   const query = new URLSearchParams({ id: repo.id, name: skill.name, rev: repo.head, template: (repo.template ?? sync.data.template).head });
   let result; try { result = await api(`sync/compare?${query}`); } catch (error) { if (request === compareRequest) $('syncDiff').textContent = error.message; return; }
@@ -441,6 +444,8 @@ function syncRepoBlock(repo) {
   const title = document.createElement('h2'); title.textContent = repo.name;
   const id = document.createElement('a'); id.className = 'pill'; id.textContent = repo.id; id.href = 'https://github.com/' + repo.id.split('/').map(encodeURIComponent).join('/'); id.target = '_blank'; id.rel = 'noopener noreferrer'; id.setAttribute('aria-label', `Open ${repo.id} on GitHub (new tab)`);
   head.append(title, id);
+  // A project on its own template says so; everything on the page heading's template stays quiet.
+  if (repoTemplate(repo).id !== sync.data.template.id) { const from = document.createElement('span'); from.className = 'pill'; from.textContent = `from ${repoTemplate(repo).id}`; head.append(from); }
   const tally = (status, codex) => repo.skills.filter(hasStatus(status, codex)).length;
   if (tally('behind') + tally('new')) {
     const toggle = document.createElement('label'); toggle.className = 'sync-toggle'; const box = document.createElement('input'); box.type = 'checkbox'; box.dataset.toggle = repo.id;
@@ -505,7 +510,9 @@ function setAllSync(on) {
 function syncSelection() {
   const byRepo = new Map();
   for (const input of $('syncRepos').querySelectorAll('input[data-skill]:checked')) {
-    const entry = byRepo.get(input.dataset.repo) ?? { id: input.dataset.repo, apply: [], remove: [], replace: [] };
+    // template: the head this page compared against, so the server refuses a sync from a newer scan.
+    const repo = sync.data.repos.find(item => item.id === input.dataset.repo);
+    const entry = byRepo.get(input.dataset.repo) ?? { id: input.dataset.repo, template: repoTemplate(repo).head, apply: [], remove: [], replace: [] };
     entry[input.dataset.action].push(input.dataset.skill); byRepo.set(entry.id, entry);
   }
   return [...byRepo.values()];

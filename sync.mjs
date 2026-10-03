@@ -367,7 +367,8 @@ export async function scanSkills({ root, execute = run, template: given, cache, 
       await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
       head = (await execute('git', ['-C', clone.folder, 'rev-parse', 'origin/main'])).trim();
     } catch (error) { return { ...clone, harness: true, error: `Could not fetch. ${reason(error)}` }; }
-    const id = templateFor(clone.id);
+    // GitHub's current name too, so a template set under a renamed repository's new name still applies.
+    const id = templateFor(clone.id, github.name);
     let template;
     try { template = await open(id); }
     catch (error) { return { ...clone, harness: true, error: `Could not read its template ${id}. ${reason(error)}` }; }

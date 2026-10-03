@@ -91,9 +91,16 @@ export async function loadSettings({ file = settingsFile(), legacy = legacyPaths
   return { settings, migrated };
 }
 
-// The template a project syncs from: its own, else the default. templateIds lists every template in
-// use, so their clones are never treated as projects.
-export const templateOf = (settings, id) => Object.entries(settings.projects).find(([key]) => key.toLowerCase() === String(id).toLowerCase())?.[1].template ?? settings.defaultTemplate;
+// The template a project syncs from: its own, else the default. A project can be named more than one
+// way (the clone's origin and GitHub's current name after a rename); the first one with a template wins.
+// templateIds lists every template in use, so their clones are never treated as projects.
+export const templateOf = (settings, ...ids) => {
+  for (const id of ids.filter(Boolean)) {
+    const own = Object.entries(settings.projects).find(([key]) => key.toLowerCase() === String(id).toLowerCase())?.[1].template;
+    if (own) return own;
+  }
+  return settings.defaultTemplate;
+};
 export const templateIds = settings => [...new Set([settings.defaultTemplate, ...Object.values(settings.projects).map(project => project.template).filter(Boolean)])];
 
 // The paused projects as the skip list sync.mjs reads: [{ repo, reason }]. A pause with no reason

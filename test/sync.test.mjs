@@ -119,7 +119,11 @@ test('each clone is compared with its own template, cached per template, and tem
     GIT_CONFIG_KEY_1: `url.${other.replaceAll('\\', '/')}.insteadOf`, GIT_CONFIG_VALUE_1: 'https://github.com/me/other.git',
   });
   const cacheDir = path.join(data.temp, 'app-data');
-  const result = await scanSkills({ root: data.root, execute: data.execute, defaultTemplate: 'me/base', templateFor: id => id === 'owner/project' ? 'me/other' : 'me/base', templates: ['me/other'], cacheDir });
+  // GitHub reports a newer name than the clone's origin; the template set under that name applies.
+  data.gh.name = 'owner/renamed';
+  const asked = [];
+  const result = await scanSkills({ root: data.root, execute: data.execute, defaultTemplate: 'me/base', templateFor: (...ids) => { asked.push(ids); return ids.includes('owner/renamed') ? 'me/other' : 'me/base'; }, templates: ['me/other'], cacheDir });
+  assert.deepEqual(asked, [['owner/project', 'owner/renamed']]);
   assert.equal(result.template.id, 'me/base');
   const [repo] = result.repos;
   assert.equal(repo.template.id, 'me/other');
