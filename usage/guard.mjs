@@ -7,7 +7,8 @@ export const CHANGE_HEADER = "x-usage-request";
 
 export function localRequest(req, port) {
   const host = req.headers.host, origin = req.headers.origin;
-  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return false;
+  // URL drops a default port the way browsers do, so port 80 matches a bare "127.0.0.1".
+  if (!["127.0.0.1", "localhost"].some((name) => host === new URL(`http://${name}:${port}`).host)) return false;
   if ((origin && origin !== `http://${host}`) || req.headers["sec-fetch-site"] === "cross-site") return false;
   return req.method === "GET" || (origin === `http://${host}` && req.headers[CHANGE_HEADER] === "1");
 }

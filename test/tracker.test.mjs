@@ -41,4 +41,5 @@ test('tracker guard: loopback Host on every route; changes need same Origin and 
   assert.equal(await send('POST', { origin: self }), 403, 'simple POST without the custom header');
   assert.equal(await send('POST', { 'x-usage-request': '1' }), 403, 'POST without Origin');
   assert.equal(await send('POST', { ...change, origin: `http://localhost:${port}` }), 403, 'Origin must match Host');
-});
+  // On port 80 browsers send Host and Origin without the port.
+  assert.equal(localRequest({ method: 'POST', headers: { host: '127.0.0.1', origin: 'http://127.0.0.1', 'x-usage-request': '1' } }, 80), true);});
