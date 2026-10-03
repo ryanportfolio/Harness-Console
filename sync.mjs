@@ -493,7 +493,8 @@ async function writeRegistries(template, worktree, updates, nativeCopies) {
 // Keeps the compatibility table in step with the skills: an added skill the table does not list goes
 // into the row the template gives it, a removed skill leaves its row. Only rows that are a plain list
 // of skills, or hold no skill at all, are rewritten; a row with other text is left for the checks to
-// report. A repository without the table gets none.
+// report. A status the table has no row for gets one after the last status row. A repository without
+// the table gets none.
 async function writeCompatibility(template, worktree, add, drop) {
   const full = path.join(worktree, ...COMPATIBILITY.split('/'));
   if (!await exists(full)) return;
@@ -502,15 +503,22 @@ async function writeCompatibility(template, worktree, add, drop) {
   const moves = new Map(drop.filter(name => listed.has(name)).map(name => [name, null]));
   for (const name of add) if (!listed.has(name) && template.classes.has(name)) moves.set(name, template.classes.get(name));
   if (!moves.size) return;
-  const lines = text.split(/\r?\n/).map(line => {
+  const sorted = names => names.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+  const row = (status, names) => `| ${status} | ${names.length ? sorted(names).map(name => `\`${name}\``).join(', ') : 'None.'} |`;
+  const rows = new Set(); let last = -1;
+  const lines = text.split(/\r?\n/).map((line, index) => {
     const match = CLASS_ROW.exec(line); if (!match) return line;
+    rows.add(match[1]); last = index;
     const cell = match[2].trim(), skills = [...cell.matchAll(/`([^`]+)`/g)].map(skill => skill[1]);
     if (skills.length && !/^`[^`]+`(?:\s*,\s*`[^`]+`)*$/.test(cell)) return line;
     const kept = skills.filter(name => !moves.has(name)).concat([...moves].filter(([, status]) => status === match[1]).map(([name]) => name));
     if (kept.length === skills.length && kept.every((name, index) => name === skills[index])) return line;
-    kept.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
-    return `| ${match[1]} | ${kept.length ? kept.map(name => `\`${name}\``).join(', ') : 'None.'} |`;
+    return row(match[1], kept);
   });
+  if (last < 0) return;
+  const missing = new Map();
+  for (const [name, status] of moves) if (status && !rows.has(status)) missing.set(status, [...missing.get(status) ?? [], name]);
+  lines.splice(last + 1, 0, ...[...missing].map(([status, names]) => row(status, names)));
   await writeFile(full, lines.join(eol));
 }
 
@@ -614,14 +622,22 @@ async function applyRepo({ template, clone, skipList, apply, remove, replace, ex
     catch (error) { throw Object.assign(new Error(`Pushed branch ${branch}, but could not open the pull request: ${reason(error)}. Open it on GitHub by hand.`), { branch }); }
     const url = String(out).split(/\r?\n/).map(line => line.trim()).find(line => /^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+$/.test(line)) ?? null;
     if (!url) throw Object.assign(new Error(`Opened a pull request from ${branch}, but gh printed no link to merge. Merge it on GitHub by hand.`), { branch });
-    // Squash-merged straight away. A merge GitHub refuses (branch protection, required checks, a
-    // conflict with a newer main) leaves the pull request open and fails this repository.
-    try { await execute('gh', ['pr', 'merge', url, '--squash'], { cwd: worktree }); }
+    // Squash-merged straight away, pinned to the commit the checks ran on. A merge GitHub refuses
+    // (branch protection, required checks, a conflict with a newer main, a branch that moved since
+    // the push) leaves the pull request open and fails this repository.
+    try { await execute('gh', ['pr', 'merge', url, '--squash', '--match-head-commit', commit], { cwd: worktree }); }
     catch (error) { throw Object.assign(new Error(`Opened ${url}, but could not merge it: ${reason(error)}. Merge it on GitHub by hand.`), { branch, url }); }
     // On a branch with a merge queue, gh pr merge can succeed by queueing the pull request or turning on
-    // auto-merge. The branch is deleted only once GitHub reports the pull request merged.
-    const state = (await execute('gh', ['pr', 'view', url, '--json', 'state', '--jq', '.state'], { cwd: worktree }).catch(() => '')).trim();
-    if (state !== 'MERGED') throw Object.assign(new Error(`Opened ${url}; GitHub queued it instead of merging (state ${state || 'unknown'}). It merges when its checks pass; the branch stays until then.`), { branch, url });
+    // auto-merge. The branch is deleted only once GitHub reports the pull request merged; a state that
+    // cannot be read after three tries is reported as unconfirmed, and the branch stays.
+    let state = '', lookup = null;
+    for (let attempt = 0; attempt < 3 && !state; attempt++) {
+      if (attempt) await new Promise(resolve => setTimeout(resolve, 1000));
+      try { state = String(await execute('gh', ['pr', 'view', url, '--json', 'state', '--jq', '.state'], { cwd: worktree })).trim(); lookup = null; }
+      catch (error) { lookup = error; }
+    }
+    if (!state) throw Object.assign(new Error(`Asked GitHub to merge ${url}, but could not confirm the merge: ${reason(lookup)}. Check it on GitHub; the branch stays.`), { branch, url });
+    if (state !== 'MERGED') throw Object.assign(new Error(`Opened ${url}; GitHub queued it instead of merging (state ${state}). It merges when its checks pass; the branch stays until then.`), { branch, url });
     await git([...GIT_CRED, 'push', '--quiet', 'origin', '--delete', branch]).catch(() => say(`merged, but could not delete branch ${branch}`));
     say(`merged ${url} (${changes.join('; ')})`);
     return { id: clone.id, result: 'merged', commit, branch, url };

@@ -23,7 +23,7 @@ const json = value => `${JSON.stringify(value, null, 2)}\n`;
 // merge (onMerge moves main on the local remote), and fails on anything else. Git pushes and fetches are recorded too, so a test can prove none targets
 // main and a skipped clone is never fetched.
 function fakeGitHub() {
-  const gh = { calls: [], pushes: [], fetches: [], archived: false, fail: null, prFail: null, mergeFail: null, queued: false, merged: false, head: null, onMerge: async () => {}, name: 'owner/project', branch: 'main', pr: 'https://github.com/owner/project/pull/7' };
+  const gh = { calls: [], pushes: [], fetches: [], archived: false, fail: null, prFail: null, mergeFail: null, queued: false, merged: false, viewFail: null, head: null, onMerge: async () => {}, name: 'owner/project', branch: 'main', pr: 'https://github.com/owner/project/pull/7' };
   gh.execute = async (command, args, options) => {
     if (command === 'git' && args.includes('push')) gh.pushes.push(args);
     if (command === 'git' && args.includes('fetch')) gh.fetches.push(args);
@@ -33,7 +33,7 @@ function fakeGitHub() {
     if (args[0] === 'api') return `${JSON.stringify({ archived: gh.archived, name: gh.name, branch: gh.branch })}\n`;
     if (args[0] === 'pr' && args[1] === 'create') { if (gh.prFail) throw new Error(gh.prFail); gh.head = args[args.indexOf('--head') + 1]; return `${gh.pr}\n`; }
     if (args[0] === 'pr' && args[1] === 'merge') { if (gh.mergeFail) throw new Error(gh.mergeFail); gh.merged = !gh.queued; if (gh.merged) await gh.onMerge(gh.head); return ''; }
-    if (args[0] === 'pr' && args[1] === 'view') return `${gh.merged ? 'MERGED' : 'OPEN'}\n`;
+    if (args[0] === 'pr' && args[1] === 'view') { if (gh.viewFail) throw new Error(gh.viewFail); return `${gh.merged ? 'MERGED' : 'OPEN'}\n`; }
     throw new Error(`unexpected gh call: ${args.join(' ')}`);
   };
   return gh;
@@ -183,7 +183,7 @@ test('apply merges a pull request from a new branch, deletes the branch and leav
   const [create, merged, view] = prCalls(data);
   assert.equal(prCalls(data).length, 3);
   assert.deepEqual(create.slice(0, 2), ['pr', 'create']);
-  assert.deepEqual(merged, ['pr', 'merge', data.gh.pr, '--squash']);
+  assert.deepEqual(merged, ['pr', 'merge', data.gh.pr, '--squash', '--match-head-commit', outcome.commit]);
   assert.deepEqual(view.slice(0, 3), ['pr', 'view', data.gh.pr]);
   assert.equal(flag(create, '--repo'), 'owner/project'); assert.equal(flag(create, '--base'), 'main'); assert.equal(flag(create, '--head'), branch);
   assert.equal(flag(create, '--title'), 'Sync skills from Harness-Firmware');
@@ -374,6 +374,15 @@ test('a pull request GitHub refuses to merge stays open with its branch, and mai
   assert.equal(waiting.result, 'failed'); assert.equal(waiting.url, queued.gh.pr);
   assert.match(waiting.error, /GitHub queued it instead of merging \(state OPEN\)/);
   assert.deepEqual(await syncBranches(queued), [`refs/heads/${waiting.branch}`]);
+
+  // A merge that went through but whose state cannot be read is unconfirmed, not queued, and keeps its branch.
+  const unread = await fixture(t);
+  unread.gh.viewFail = 'HTTP 502';
+  const unknown = (await applySkills({ root: unread.root, execute: unread.execute, template: await unread.opened(), selection: [{ id: 'owner/project', apply: ['alpha'] }] }).catch(error => error)).results[0];
+  assert.equal(unknown.result, 'failed');
+  assert.equal(unknown.error, `Asked GitHub to merge ${unread.gh.pr}, but could not confirm the merge: HTTP 502. Check it on GitHub; the branch stays.`);
+  assert.equal(unread.gh.calls.filter(args => args[1] === 'view').length, 3);
+  assert.deepEqual(await syncBranches(unread), [`refs/heads/${unknown.branch}`]);
 });
 
 test('the committed skip list names the frozen repositories', async () => {
