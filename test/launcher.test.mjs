@@ -9,6 +9,8 @@ import { createApp } from '../server.mjs';
 import { launchHarnessConsole, parseListeningPid, isTrackerCommandLine, isAnyTrackerCommandLine, selfUpdate, startLatest } from '../launcher.mjs';
 
 const close = server => new Promise(resolve => server.close(resolve));
+// launchHarnessConsole builds an app before it checks the port; this one never touches the user's settings.
+const memoryApp = () => createApp({ adapter: { account: async () => ({ connected: true }) }, settingsFile: null });
 
 test('launcher starts when down and repeated launches preserve an active clone', async t => {
   let finishClone;
@@ -17,7 +19,8 @@ test('launcher starts when down and repeated launches preserve an active clone',
   const first = await launchHarnessConsole({ port: 0, open: url => opened.push(url), createServer: () => createApp({
     adapter: { account: async () => ({ connected: true }), repositories: async () => [{ id: 'owner/repo' }] },
     clone: () => clonePending,
-    // No preference file is written while this test keeps its fake clone pending.
+    // Settings stay in memory, so the test never reads or writes the user's settings file.
+    settingsFile: null, root: 'C:/CoreWise',
   }) });
   t.after(() => close(first.server));
   assert.equal(first.reused, false);
@@ -25,7 +28,7 @@ test('launcher starts when down and repeated launches preserve an active clone',
   await fetch(first.origin + '/api/repos');
   await fetch(first.origin + '/api/clone', { method: 'POST', headers: { Origin: first.origin, 'Content-Type': 'application/json', 'X-CoreWise-Token': state.token }, body: JSON.stringify({ id: 'owner/repo' }) });
   const port = first.server.address().port;
-  const repeats = await Promise.all(Array.from({ length: 3 }, () => launchHarnessConsole({ port, open: url => opened.push(url) })));
+  const repeats = await Promise.all(Array.from({ length: 3 }, () => launchHarnessConsole({ port, open: url => opened.push(url), createServer: memoryApp })));
   assert(repeats.every(result => result.reused && result.server === null));
   assert.deepEqual(opened, Array(4).fill(first.origin));
   const { job } = await (await fetch(first.origin + '/api/job')).json();
@@ -36,7 +39,7 @@ test('launcher starts when down and repeated launches preserve an active clone',
 });
 
 test('launcher replaces an idle instance with a fresh server on the same port', async t => {
-  const app = () => createApp({ adapter: { account: async () => ({ connected: true }) }, preferences: 'nonexistent-fixture-preferences' });
+  const app = () => createApp({ adapter: { account: async () => ({ connected: true }) }, settingsFile: null });
   const first = await launchHarnessConsole({ port: 0, open: () => {}, createServer: app });
   const port = first.server.address().port;
   const closed = new Promise(resolve => first.server.once('close', resolve));
@@ -56,7 +59,7 @@ test('launcher refuses an unrelated service without stopping it', async t => {
   await new Promise(resolve => other.listen(0, '127.0.0.1', resolve));
   t.after(() => close(other));
   const port = other.address().port;
-  await assert.rejects(launchHarnessConsole({ port, open: () => assert.fail('must not open unrelated app') }), /another service/);
+  await assert.rejects(launchHarnessConsole({ port, open: () => assert.fail('must not open unrelated app'), createServer: memoryApp }), /another service/);
   assert.equal(await (await fetch(`http://127.0.0.1:${port}`)).text(), 'another app');
 });
 
@@ -67,7 +70,7 @@ test('launcher reuses the earliest CoreWise build without restarting it', async 
   });
   await new Promise(resolve => legacy.listen(0, '127.0.0.1', resolve));
   t.after(() => close(legacy));
-  const result = await launchHarnessConsole({ port: legacy.address().port, open: () => {} });
+  const result = await launchHarnessConsole({ port: legacy.address().port, open: () => {}, createServer: memoryApp });
   assert.equal(result.reused, true);
 });
 
@@ -85,7 +88,7 @@ test('startLatest leaves the files alone while a running instance refuses to qui
 });
 
 test('startLatest stops an idle instance before updating, then relaunches when main moved', async t => {
-  const first = await launchHarnessConsole({ port: 0, open: () => {}, createServer: () => createApp({ adapter: { account: async () => ({ connected: true }) }, preferences: 'nonexistent-fixture-preferences' }) });
+  const first = await launchHarnessConsole({ port: 0, open: () => {}, createServer: () => createApp({ adapter: { account: async () => ({ connected: true }) }, settingsFile: null }) });
   const port = first.server.address().port;
   const closed = new Promise(resolve => first.server.once('close', resolve));
   const calls = [];

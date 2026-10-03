@@ -1,7 +1,6 @@
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -10,17 +9,35 @@ import { createProject, skillCatalog } from './harness.mjs';
 import { applySkills, compareSkill, normalizeLock, normalizeSelection, scanSkills, setSkillLock, skillStory } from './sync.mjs';
 import { compareDsh, installDsh, normalizeChoices, previewDsh } from './dsh.mjs';
 import { TRACKER } from './launcher.mjs';
+import { defaults, legacyPaths, loadSettings, pausedList, readSettings, settingsFile as defaultSettingsFile, updateSettings } from './settings.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/new-project.css': ['new-project.css', 'text/css'], '/sync.css': ['sync.css', 'text/css'] };
-export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapter = github(), clone = cloneMain, update = updateMain, local = localState, create = createProject, catalog = skillCatalog, scan = scanSkills, sync = applySkills, lockSkill = setSkillLock, compareSync = compareSkill, storySync = skillStory, dshPreview = previewDsh, dshInstall = installDsh, dshCompare = compareDsh, preferences = path.join(homedir(), '.corewise-cloner', 'preferences.json'), build = null } = {}) {
+// settingsFile null keeps settings in memory only (tests); root, when given, overrides the workspace.
+export async function createApp({ root: rootOverride = null, settingsFile = defaultSettingsFile(), legacy = legacyPaths(), adapter = github(), clone = cloneMain, update = updateMain, local = localState, create = createProject, catalog = skillCatalog, scan = scanSkills, sync = applySkills, lockSkill = setSkillLock, compareSync = compareSkill, storySync = skillStory, dshPreview = previewDsh, dshInstall = installDsh, dshCompare = compareDsh, build = null } = {}) {
   const token = randomBytes(32).toString('hex');
-  let repos = [], lastSelected = null, job = null, skills = null, lastScan = null, lastDsh = null;
+  let repos = [], job = null, skills = null, lastScan = null, lastDsh = null;
+  // A settings file that cannot be read leaves the app usable but refuses every sync and lock, because
+  // the paused projects it lists must never be written. It is not overwritten either.
+  let settings = defaults(), settingsError = null;
+  if (settingsFile) {
+    try { settings = (await loadSettings({ file: settingsFile, legacy })).settings; }
+    catch (error) { settingsError = `Could not read the settings file. ${error.message}`; }
+  }
+  const root = rootOverride ?? settings.workspace;
+  let lastSelected = settings.lastSelected;
+  const needRoot = () => { if (!root) throw new Error(settingsError ?? `Choose a workspace folder first: set "workspace" in ${settingsFile ?? 'the settings file'}.`); return root; };
+  // Paused projects are read from the file each time, so a pause added while the app runs holds.
+  const paused = async () => {
+    if (settingsError) throw new Error(settingsError);
+    if (!settingsFile) return pausedList(settings);
+    try { return pausedList(await readSettings(settingsFile)); }
+    catch (error) { throw new Error(`Could not read the settings file. ${error.message}`); }
+  };
   // DSH installs read the local Harness-Firmware checkout; the preview keeps the rendered bytes,
   // so an install writes exactly what was shown.
-  const dshSource = path.join(root, 'Harness-Firmware');
+  const dshSource = () => path.join(needRoot(), 'Harness-Firmware');
   const dshView = preview => ({ ...preview, skills: preview.skills.map(({ rendered, ...skill }) => skill) });
-  try { lastSelected = JSON.parse(await readFile(preferences, 'utf8')).lastSelected || null; } catch {}
   const reply = (res, code, data) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); };
   // The template's skill list is refetched each time a page loads the picker, so a create checks the
   // list the most recent page load showed. A create with no list yet fetches one; a failed fetch is
@@ -47,14 +64,14 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
         try { up = (await fetch(`${trackerUrl}/api/usage`, { signal: AbortSignal.timeout(1500) })).ok; } catch {}
         return reply(res, 200, { up, url: trackerUrl });
       }
-      if (req.method === 'GET' && url.pathname === '/api/status') return reply(res, 200, { ...await adapter.account(), root, token, lastSelected, build });
+      if (req.method === 'GET' && url.pathname === '/api/status') return reply(res, 200, { ...await adapter.account(), root, token, lastSelected, build, settingsFile, settingsError });
       if (req.method === 'GET' && url.pathname === '/api/repos') { repos = await adapter.repositories(); return reply(res, 200, { repos }); }
       if (req.method === 'GET' && url.pathname === '/api/skills') {
         try { return reply(res, 200, await fetchSkills()); }
         catch (error) { return reply(res, 502, { error: `Could not read the template's skills. ${error.message}` }); }
       }
       if (req.method === 'GET' && url.pathname === '/api/sync') {
-        try { lastScan = await scan({ root }); return reply(res, 200, lastScan); }
+        try { lastScan = await scan({ root: needRoot(), skip: await paused() }); return reply(res, 200, lastScan); }
         catch (error) { return reply(res, 502, { error: `Could not compare skills. ${error.message}` }); }
       }
       if (req.method === 'GET' && url.pathname === '/api/sync/compare') {
@@ -72,7 +89,7 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
         if (job?.status === 'running' && job.kind === 'dsh') return reply(res, 409, { error: 'Wait for the DSH install to finish.' });
         // Each preview gets an id; an install names the preview it confirmed, so a newer check
         // from another tab can never swap in different bytes.
-        try { lastDsh = { ...await dshPreview({ source: dshSource }), id: randomBytes(8).toString('hex') }; return reply(res, 200, dshView(lastDsh)); }
+        try { lastDsh = { ...await dshPreview({ source: dshSource() }), id: randomBytes(8).toString('hex') }; return reply(res, 200, dshView(lastDsh)); }
         catch (error) { lastDsh = null; return reply(res, 502, { error: `Could not preview DSH skills. ${error.message}` }); }
       }
       if (req.method === 'GET' && url.pathname === '/api/dsh/compare') {
@@ -81,7 +98,7 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
         return reply(res, 200, { name: skill.name, diff: await dshCompare({ skill, dest: lastDsh.dest }) });
       }
       if (req.method === 'GET' && url.pathname === '/api/job') return reply(res, 200, { job });
-      if (req.method === 'GET' && url.pathname === '/api/local') { const id = validateRepo(url.searchParams.get('id')); return reply(res, 200, await local({ root, id })); }
+      if (req.method === 'GET' && url.pathname === '/api/local') { const id = validateRepo(url.searchParams.get('id')); return reply(res, 200, await local({ root: needRoot(), id })); }
       if (req.method !== 'POST') return reply(res, 404, { error: 'Not found.' });
       if (req.headers.origin !== origin || req.headers['x-corewise-token'] !== token || req.headers['content-type'] !== 'application/json') return reply(res, 403, { error: 'Invalid local session. Reload this page.' });
       let raw = '';
@@ -96,6 +113,8 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
       if (!['/api/clone', '/api/update', '/api/login', '/api/create', '/api/sync', '/api/sync-lock', '/api/dsh'].includes(url.pathname)) return reply(res, 404, { error: 'Not found.' });
       if (job?.status === 'running') return reply(res, 409, { error: 'An operation is already running.' });
       const kind = url.pathname.slice('/api/'.length);
+      if (['clone', 'update', 'create', 'sync', 'sync-lock'].includes(kind)) needRoot();
+      const skip = ['sync', 'sync-lock'].includes(kind) ? await paused() : null;
       if (kind === 'clone' || kind === 'update') { validateRepo(body.id); if (!repos.some(repo => repo.id === body.id)) throw new Error('Refresh and select a repository from your account.'); }
       let request = null;
       if (kind === 'dsh') {
@@ -141,10 +160,10 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
             catch (error) { active.results = error.results ?? null; throw error; }
           } else if (kind === 'sync-lock') {
             // A pull request that opened but did not merge keeps its link, as a failed sync does.
-            try { active.results = [await lockSkill({ root, ...request, onOutput: output })]; }
+            try { active.results = [await lockSkill({ root, ...request, skip, onOutput: output })]; }
             catch (error) { active.results = error.branch ? [{ id: request.id, result: 'failed', branch: error.branch, ...(error.url && { url: error.url }) }] : null; throw error; }
           } else if (kind === 'sync') {
-            try { active.results = await sync({ root, selection: request, onOutput: output }); }
+            try { active.results = await sync({ root, selection: request, skip, onOutput: output }); }
             catch (error) { active.results = error.results ?? null; throw error; }
           } else if (kind === 'create') {
             const result = await create({ root, ...request, catalog: await loadSkills(), onOutput: output });
@@ -154,7 +173,10 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
           } else {
             active.destination = await clone({ root, id: body.id, onOutput: output });
             lastSelected = body.id;
-            try { await mkdir(path.dirname(preferences), { recursive: true }); await writeFile(preferences, JSON.stringify({ lastSelected }, null, 2)); } catch { output('Could not save selection preference.\n'); }
+            // Saved into the file as it is now, never over one that failed to load or became unreadable.
+            if (settingsFile && !settingsError) {
+              try { settings = await updateSettings(settingsFile, { lastSelected }); } catch (error) { output(`Could not save the selection. ${error.message}\n`); }
+            }
           }
           active.status = 'complete';
         } catch (error) { active.status = 'failed'; active.error = error.message; output(`\n${error.message}\n`); }
@@ -168,7 +190,7 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const argument = name => { const index = process.argv.indexOf(name); return index < 0 ? undefined : process.argv[index + 1]; };
-  const server = await createApp({ root: argument('--root'), preferences: argument('--preferences') });
+  const server = await createApp({ root: argument('--root') ?? null, settingsFile: argument('--settings') });
   const port = Number(argument('--port') || 0);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port.');
   server.listen(port, '127.0.0.1', () => {

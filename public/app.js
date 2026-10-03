@@ -22,7 +22,7 @@ function list() {
 function select(repo) {
   selected = repo; $('empty').hidden = true; $('detail').hidden = false;
   $('owner').textContent = repo.owner; $('name').textContent = repo.name; $('repoLink').href = 'https://github.com/' + repo.id.split('/').map(encodeURIComponent).join('/'); $('repoLink').setAttribute('aria-label', `Open ${repo.id} on GitHub (new tab)`); $('visibility').textContent = repo.private ? 'Private' : 'Public'; $('description').textContent = repo.description || 'Bring this repository into your workspace.'; $('language').textContent = repo.language || 'Git repository'; $('updated').textContent = repo.updated ? `Updated ${new Date(repo.updated).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}` : '';
-  $('destination').textContent = root + (root.includes('\\') ? '\\' : '/') + repo.name; list(); checkLocal();
+  $('destination').textContent = root ? root + (root.includes('\\') ? '\\' : '/') + repo.name : 'No workspace folder yet'; list(); checkLocal();
 }
 // The destination may already hold a clone; then the card offers a fast-forward of main instead of a clone.
 let local = null;
@@ -50,7 +50,7 @@ function renderLocal() {
   const updating = button.dataset.kind === 'update';
   $('cardTitle').textContent = updating ? 'Update repository' : 'Clone repository';
   $('cardHint').textContent = updating ? 'Fast-forwards your local main to what is on GitHub.' : 'A working copy, ready for your changes.';
-  button.disabled = busy || blocked;
+  button.disabled = busy || blocked || !root;
 }
 async function refresh() {
   notice(); $('refresh').disabled = true;
@@ -59,6 +59,8 @@ async function refresh() {
     const build = state.build; $('build').textContent = !build ? '' : build.note ? `Build ${build.head ?? 'unknown'}. ${build.note}` : `Build ${build.head}, up to date with GitHub`;
     $('account').textContent = state.connected ? state.login : state.needsLogin === false ? 'GitHub unavailable' : 'Connect GitHub'; $('accountHint').textContent = state.connected ? 'GitHub connected' : state.needsLogin === false ? 'Check connection and refresh' : 'Use your GitHub account'; $('login').hidden = state.connected || state.needsLogin === false;
     if (!state.connected) { repos = []; list(); notice(state.error || 'Sign in to browse your public and private repositories.'); return; }
+    if (state.settingsError) notice(state.settingsError);
+    else if (!root) notice(`No workspace folder yet. Set "workspace" in ${state.settingsFile}, then reopen the app.`);
     repos = (await api('repos')).repos;
     const next = repos.find(repo => repo.id === (selected?.id || state.lastSelected)) || repos[0];
     if (next) select(next); else { selected = null; $('detail').hidden = true; $('empty').hidden = false; list(); }

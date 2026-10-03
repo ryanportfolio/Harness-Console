@@ -4,7 +4,7 @@ import http from 'node:http';
 import { createApp } from '../server.mjs';
 
 test('malformed HTTP request target returns 400 and leaves the server usable', async t => {
-  const server = await createApp({ adapter: { account: async () => ({ connected: true, login: 'fixture' }) }, preferences: 'nonexistent-fixture-preferences' });
+  const server = await createApp({ adapter: { account: async () => ({ connected: true, login: 'fixture' }) }, settingsFile: null, root: 'C:/CoreWise' });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const request = target => new Promise((resolve, reject) => {
@@ -27,7 +27,7 @@ test('malformed HTTP request target returns 400 and leaves the server usable', a
 });
 
 test('HTTP guards reject foreign host, origin, missing token and arbitrary repository', async t => {
-  const server = await createApp({ adapter: { account: async () => ({ connected: true, login: 'fixture' }), repositories: async () => [{ id: 'owner/repo' }] }, preferences: 'nonexistent-fixture-preferences' });
+  const server = await createApp({ adapter: { account: async () => ({ connected: true, login: 'fixture' }), repositories: async () => [{ id: 'owner/repo' }] }, settingsFile: null, root: 'C:/CoreWise' });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const port = server.address().port, origin = `http://127.0.0.1:${port}`;
@@ -51,7 +51,7 @@ test('skills and create routes validate input and reuse the single job slot', as
     adapter: { account: async () => ({ connected: true, login: 'fixture' }) },
     catalog: async () => ({ groups: [], skills: [{ name: 'init-project', required: true }, { name: 'lab' }] }),
     create: async ({ name, description, isPrivate, disabledSkills, catalog, onOutput }) => { created.push({ name, description, isPrivate, disabledSkills, skills: catalog.skills.length }); onOutput('made\n'); return { destination: `C:/CoreWise/${name}`, remoteUrl: `https://github.com/fixture/${name}`, disabledSkills }; },
-    preferences: 'nonexistent-fixture-preferences',
+    settingsFile: null, root: 'C:/CoreWise',
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
@@ -84,7 +84,7 @@ test('each picker load refetches the template catalog and a create uses the late
     adapter: { account: async () => ({ connected: true, login: 'fixture' }) },
     catalog: async () => { fetches++; if (fetches === 1) throw new Error('offline'); return { groups: [], skills: fetches === 2 ? [{ name: 'init-project' }] : [{ name: 'init-project' }, { name: 'late-review' }] }; },
     create: async ({ name, catalog, disabledSkills }) => { seen.push(catalog.skills.map(skill => skill.name)); return { destination: `C:/CoreWise/${name}`, remoteUrl: '', disabledSkills }; },
-    preferences: 'nonexistent-fixture-preferences',
+    settingsFile: null, root: 'C:/CoreWise',
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
@@ -113,7 +113,7 @@ test('local and update routes validate the repository and run the update job', a
     adapter: { account: async () => ({ connected: true, login: 'fixture' }), repositories: async () => [{ id: 'owner/repo' }] },
     local: async ({ id }) => ({ destination: `C:/CoreWise/${id.split('/')[1]}`, exists: true, git: true, matches: true, branch: 'main', dirty: [] }),
     update: async ({ id, onOutput }) => { updated.push(id); onOutput('done\n'); return `C:/CoreWise/${id.split('/')[1]}`; },
-    preferences: 'nonexistent-fixture-preferences',
+    settingsFile: null, root: 'C:/CoreWise',
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
@@ -138,7 +138,7 @@ test('sync route pins a replacement to the scanned trees and refuses skills that
     adapter: { account: async () => ({ connected: true, login: 'fixture' }) },
     scan: async () => ({ template: { head: 'abc' }, repos: [{ id: 'owner/project', name: 'project', skills: [{ name: 'beta', status: 'customized', trees: 't1:-' }, { name: 'alpha', status: 'behind' }] }] }),
     sync: async ({ selection }) => { synced.push(selection); return []; },
-    preferences: 'nonexistent-fixture-preferences',
+    settingsFile: null, root: 'C:/CoreWise',
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
@@ -163,7 +163,7 @@ test('sync route refuses a repository the scan skipped or could not check', asyn
       { id: 'owner/project', name: 'project', skills: [{ name: 'alpha', status: 'behind' }] },
     ] }),
     sync: async ({ selection }) => { synced.push(selection); return []; },
-    preferences: 'nonexistent-fixture-preferences',
+    settingsFile: null, root: 'C:/CoreWise',
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
@@ -185,7 +185,7 @@ test('sync compare route reads only a scanned repository and skill at the scanne
     scan: async () => ({ template: { head: 'abc' }, repos: [{ id: 'owner/project', name: 'project', folder: 'C:/CoreWise/project', head: 'def', skills: [{ name: 'alpha', status: 'behind' }, { name: 'off', status: 'off' }] }] }),
     compareSync: async args => { compared.push(args); return 'diff text'; },
     storySync: async () => { throw new Error('no history'); },
-    preferences: 'nonexistent-fixture-preferences',
+    settingsFile: null, root: 'C:/CoreWise',
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
@@ -206,7 +206,7 @@ test('DSH routes preview without file bytes and install only skills from that pr
     dshPreview: async ({ source }) => ({ ...preview, source: { ...preview.source, folder: source } }),
     dshInstall: async ({ preview: shown, choices, dest }) => { installs.push({ skills: shown.skills.length, choices, dest }); return []; },
     dshCompare: async ({ skill }) => `diff for ${skill.name}`,
-    preferences: 'nonexistent-fixture-preferences',
+    settingsFile: null, root: 'C:/CoreWise',
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));

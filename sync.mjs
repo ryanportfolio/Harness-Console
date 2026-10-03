@@ -14,7 +14,8 @@ import { TEMPLATE } from './harness.mjs';
 // Before committing, the repository's own checks run in a temporary worktree: sync-codex-skills.mjs
 // --check and test-codex-contract.mjs (a check that passed on main and fails after the change stops
 // that repository; one already failing on main is reported in the pull request) and removed-skills.mjs
-// (warnings only). Repositories listed in sync-skip.json, and repositories archived on GitHub, are
+// (warnings only). Paused repositories (the server passes them from the settings file; direct callers
+// fall back to sync-skip.json), and repositories archived on GitHub, are
 // shown with the reason and never written; a GitHub lookup that fails blocks the repository too.
 
 export const GIT_CRED = ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential'];
