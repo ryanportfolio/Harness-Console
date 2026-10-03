@@ -117,6 +117,38 @@ test('a broken settings file refuses every sync and lock and is never overwritte
   assert.equal(await readFile(file, 'utf8'), '{ nope');
 });
 
+test('edits made while the app runs are kept: a new pause holds and a clone saves only its selection', async t => {
+  const dir = await temp(t), file = path.join(dir, 'settings.json'), workspace = path.join(dir, 'work');
+  await saveSettings(file, { ...defaults(), workspace });
+  const seen = [];
+  const { call } = await start(t, { settingsFile: file, legacy: null, clone: async ({ id }) => path.join(workspace, id.split('/')[1]), scan: async args => { seen.push(args.skip); return { template: { head: 'abc' }, repos: [] }; } });
+  // The user pauses a project by hand after start.
+  await saveSettings(file, { ...defaults(), workspace, projects: { 'owner/frozen': { paused: 'Added later' } } });
+  await call('sync');
+  assert.deepEqual(seen, [[{ repo: 'owner/frozen', reason: 'Added later' }]]);
+  await call('repos');
+  assert.equal((await call('clone', { id: 'owner/repo' })).status, 202);
+  for (let i = 0; i < 50 && (await call('job')).body.job.status === 'running'; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  const saved = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(saved.lastSelected, 'owner/repo');
+  assert.deepEqual(saved.projects, { 'owner/frozen': { paused: 'Added later' } });
+});
+
+test('a settings file broken while the app runs stops syncs and is not rewritten by a clone', async t => {
+  const dir = await temp(t), file = path.join(dir, 'settings.json'), workspace = path.join(dir, 'work');
+  await saveSettings(file, { ...defaults(), workspace });
+  const { call } = await start(t, { settingsFile: file, legacy: null, clone: async ({ id }) => path.join(workspace, id.split('/')[1]), scan: async () => ({ template: { head: 'abc' }, repos: [] }) });
+  await writeFile(file, '{ broken');
+  const scan = await call('sync');
+  assert.equal(scan.status, 502); assert.match(scan.body.error, /not valid JSON/);
+  await call('repos');
+  await call('clone', { id: 'owner/repo' });
+  let job;
+  for (let i = 0; i < 50 && (job = (await call('job')).body.job).status === 'running'; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.match(job.log, /Could not save the selection/);
+  assert.equal(await readFile(file, 'utf8'), '{ broken');
+});
+
 test('with no workspace the server asks for one instead of using a default folder', async t => {
   const { state, call } = await start(t, { settingsFile: null });
   assert.equal(state.root, null);

@@ -9,7 +9,7 @@ import { createProject, skillCatalog } from './harness.mjs';
 import { applySkills, compareSkill, normalizeLock, normalizeSelection, scanSkills, setSkillLock, skillStory } from './sync.mjs';
 import { compareDsh, installDsh, normalizeChoices, previewDsh } from './dsh.mjs';
 import { TRACKER } from './launcher.mjs';
-import { defaults, legacyPaths, loadSettings, pausedList, saveSettings, settingsFile as defaultSettingsFile } from './settings.mjs';
+import { defaults, legacyPaths, loadSettings, pausedList, readSettings, settingsFile as defaultSettingsFile, updateSettings } from './settings.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/new-project.css': ['new-project.css', 'text/css'], '/sync.css': ['sync.css', 'text/css'] };
@@ -27,7 +27,13 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
   const root = rootOverride ?? settings.workspace;
   let lastSelected = settings.lastSelected;
   const needRoot = () => { if (!root) throw new Error(settingsError ?? `Choose a workspace folder first: set "workspace" in ${settingsFile ?? 'the settings file'}.`); return root; };
-  const paused = () => { if (settingsError) throw new Error(settingsError); return pausedList(settings); };
+  // Paused projects are read from the file each time, so a pause added while the app runs holds.
+  const paused = async () => {
+    if (settingsError) throw new Error(settingsError);
+    if (!settingsFile) return pausedList(settings);
+    try { return pausedList(await readSettings(settingsFile)); }
+    catch (error) { throw new Error(`Could not read the settings file. ${error.message}`); }
+  };
   // DSH installs read the local Harness-Firmware checkout; the preview keeps the rendered bytes,
   // so an install writes exactly what was shown.
   const dshSource = () => path.join(needRoot(), 'Harness-Firmware');
@@ -65,7 +71,7 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
         catch (error) { return reply(res, 502, { error: `Could not read the template's skills. ${error.message}` }); }
       }
       if (req.method === 'GET' && url.pathname === '/api/sync') {
-        try { lastScan = await scan({ root: needRoot(), skip: paused() }); return reply(res, 200, lastScan); }
+        try { lastScan = await scan({ root: needRoot(), skip: await paused() }); return reply(res, 200, lastScan); }
         catch (error) { return reply(res, 502, { error: `Could not compare skills. ${error.message}` }); }
       }
       if (req.method === 'GET' && url.pathname === '/api/sync/compare') {
@@ -108,7 +114,7 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
       if (job?.status === 'running') return reply(res, 409, { error: 'An operation is already running.' });
       const kind = url.pathname.slice('/api/'.length);
       if (['clone', 'update', 'create', 'sync', 'sync-lock'].includes(kind)) needRoot();
-      const skip = ['sync', 'sync-lock'].includes(kind) ? paused() : null;
+      const skip = ['sync', 'sync-lock'].includes(kind) ? await paused() : null;
       if (kind === 'clone' || kind === 'update') { validateRepo(body.id); if (!repos.some(repo => repo.id === body.id)) throw new Error('Refresh and select a repository from your account.'); }
       let request = null;
       if (kind === 'dsh') {
@@ -167,9 +173,9 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
           } else {
             active.destination = await clone({ root, id: body.id, onOutput: output });
             lastSelected = body.id;
-            // Never over a settings file that failed to load: that would drop its paused projects.
+            // Saved into the file as it is now, never over one that failed to load or became unreadable.
             if (settingsFile && !settingsError) {
-              try { settings = { ...settings, lastSelected }; await saveSettings(settingsFile, settings); } catch { output('Could not save selection preference.\n'); }
+              try { settings = await updateSettings(settingsFile, { lastSelected }); } catch (error) { output(`Could not save the selection. ${error.message}\n`); }
             }
           }
           active.status = 'complete';

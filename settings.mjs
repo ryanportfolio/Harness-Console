@@ -52,17 +52,29 @@ export async function saveSettings(file, settings) {
 
 const exists = file => access(file).then(() => true, () => false);
 
+// The file as it is on disk now. Throws when it is missing, unreadable or invalid.
+export async function readSettings(file) {
+  let raw;
+  try { raw = await readFile(file, 'utf8'); }
+  catch (error) { throw Object.assign(new Error(error.code === 'ENOENT' ? `${file}: the file is gone` : `${file}: ${error.message}`), { code: error.code }); }
+  let data;
+  try { data = JSON.parse(raw); } catch (error) { throw new Error(`${file}: not valid JSON. ${error.message}`); }
+  return validateSettings(data, file);
+}
+
+// Applies a change to the file as it is now, so an edit the user made while the app ran is kept.
+// A file that is gone or broken is left alone: rewriting it would drop its paused projects.
+export async function updateSettings(file, change) {
+  const settings = { ...await readSettings(file), ...change };
+  await saveSettings(file, settings);
+  return settings;
+}
+
 // Reads the settings file, or creates it on first start. A file that exists but cannot be read or
 // fails validation throws: the caller refuses syncs rather than forget which projects are paused.
 export async function loadSettings({ file = settingsFile(), legacy = legacyPaths() } = {}) {
-  let raw = null;
-  try { raw = await readFile(file, 'utf8'); }
-  catch (error) { if (error.code !== 'ENOENT') throw new Error(`${file}: ${error.message}`); }
-  if (raw !== null) {
-    let data;
-    try { data = JSON.parse(raw); } catch (error) { throw new Error(`${file}: not valid JSON. ${error.message}`); }
-    return { settings: validateSettings(data, file), migrated: false };
-  }
+  try { return { settings: await readSettings(file), migrated: false }; }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
   const settings = defaults();
   const migrated = Boolean(legacy) && await exists(legacy.dir);
   if (migrated) {
