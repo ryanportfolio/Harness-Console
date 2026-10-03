@@ -277,7 +277,8 @@ export async function compareRepo({ template, folder, rev = 'origin/main', execu
   const harness = [...local[PARTS[0]].keys()].some(name => template.history[PARTS[0]].has(name));
   // A locked skill keeps its own status in `was` and offers nothing to pick, whatever it would have been.
   const locks = await readLocks(git, rev);
-  const shown = skills.map(skill => locks.has(skill.name) ? { name: skill.name, ...(skill.codex && { codex: true }), status: 'locked', reason: locks.get(skill.name), was: skill.status } : skill);
+  // Its other fields stay, so the compare view still shows a hand-written Codex copy or a retired skill.
+  const shown = skills.map(skill => locks.has(skill.name) ? { ...skill, status: 'locked', reason: locks.get(skill.name), was: skill.status } : skill);
   return { harness, nativeCopies, skills: shown.sort((a, b) => a.name.localeCompare(b.name)) };
 }
 
@@ -379,7 +380,7 @@ export async function compareSkill({ folder, rev, name, templateHead, template =
   const { skills, nativeCopies } = await compareRepo({ template, folder, rev, execute });
   const skill = skills.find(item => item.name === name);
   if (!skill) throw new Error(`${name} is not a Harness skill in this repository.`);
-  const codex = skill.codex || template.codexOnly.has(name), removal = ['removed', 'removed-edited'].includes(skill.status);
+  const codex = skill.codex || template.codexOnly.has(name), removal = ['removed', 'removed-edited'].includes(skill.was ?? skill.status);
   const ours = PARTS.filter(part => part === PARTS[0] ? !codex : codex || removal || nativeCopies.has(name) || skill.handCodex);
   const theirs = removal ? [] : PARTS.filter(part => template.current[part].has(name) && (part === PARTS[0] ? !codex : codex || nativeCopies.has(name)));
   // No trailing slash: a file or symlink where the skill folder belongs is listed too, since a
