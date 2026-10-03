@@ -276,6 +276,7 @@ function storyCard(id, name, role, side, sinceLabel) {
 }
 function storyVerdict(repo, skill) {
   const who = repo.name, name = skill.name;
+  if (skill.status === 'locked') return `${who} locked ${name}${skill.reason ? ` (${skill.reason})` : ''}. Sync leaves it as it is; the differences below are what a sync could change after it is unlocked.`;
   return {
     behind: `${who} has an older template copy of ${name} and never edited it. A sync updates it to the newest template copy; nothing is lost.`,
     new: `${who} does not have ${name} yet. A sync adds the template copy.`,
@@ -290,8 +291,8 @@ function renderStory(repo, skill, story) {
   const since = who => ({ none: `No changes since both copies last matched.`, some: n => `${n} ${n === 1 ? 'change' : 'changes'} ${who} since both copies last matched:` });
   box.append(el('div', 'compare-cards',
     storyCard(repo.id, repo.name, 'Now on main', story.repo, since(`made in ${repo.name}`)),
-    el('div', 'compare-arrow', el('span', '', 'a sync replaces'), el('span', '', '←')),
-    storyCard(story.template, 'Harness-Firmware', 'Template copy a sync writes', story.harness, since('made in the template'))));
+    el('div', 'compare-arrow', el('span', '', skill.status === 'locked' ? 'locked, sync skips' : 'a sync replaces'), el('span', '', '←')),
+    storyCard(story.template, 'Harness-Firmware', skill.status === 'locked' ? 'Template copy' : 'Template copy a sync writes', story.harness, since('made in the template'))));
   const matched = story.base
     ? el('p', 'compare-base', 'Both copies last matched on ', el('b', '', shortDate(story.base.repo.date)), `, when ${repo.name} got commit `, commitLink(repo.id, story.base.repo), ` "${story.base.repo.subject}".`)
     : el('p', 'compare-base', `${repo.name}'s copy never matched a template version on record, so changes below are not credited to one side.`);
@@ -347,7 +348,9 @@ function creditBlock(dels, adds, base, fallback) {
 function renderDiff(repo, skill, story, diff) {
   // A copy the repository never edited (behind, new, retired) differs only by template changes.
   // A side with no commits since both copies matched made none of the differences: that credit is exact.
-  const untouched = ['behind', 'new', 'removed'].includes(skill.status) || Boolean(story?.base && !story.repo.count);
+  // A locked skill is credited by the status it would have had, and no line says what a sync does.
+  const locked = skill.status === 'locked';
+  const untouched = ['behind', 'new', 'removed'].includes(skill.was ?? skill.status) || Boolean(story?.base && !story.repo.count);
   const fallback = untouched ? 'harness' : story?.base?.harness && !story.harness.count ? 'repo' : 'unknown';
   const exact = untouched || fallback === 'repo';
   const { files, notes } = parseDiff(diff), who = repo.name, tally = { repo: 0, harness: 0, both: 0, unknown: 0 };
@@ -357,7 +360,7 @@ function renderDiff(repo, skill, story, diff) {
   const baseFor = path => exact || !story?.base?.harness || !/^\.(claude|agents)\/skills\//.test(path) ? null : new Set((story.baseFiles[path] ?? '').replace(/\r/g, '').split('\n'));
   const sections = files.map(file => {
     const base = baseFor(file.path), segments = file.path.split('/'), shortPath = segments.slice(3).join('/') || file.path;
-    const state = { added: 'Only in Harness-Firmware: a sync adds this file', deleted: `Only in ${who}: a sync deletes this file`, changed: 'In both, with differences' }[file.state];
+    const state = { added: `Only in Harness-Firmware${locked ? '' : ': a sync adds this file'}`, deleted: `Only in ${who}${locked ? '' : ': a sync deletes this file'}`, changed: 'In both, with differences' }[file.state];
     const section = el('section', 'compare-file', el('div', 'compare-file-head', el('b', '', shortPath), el('span', '', segments.slice(0, 3).join('/')), el('span', `compare-state ${file.state}`, state)));
     if (file.binary) section.append(el('p', 'compare-quiet', 'Binary file; contents not shown.'));
     for (const hunk of file.hunks) {
@@ -367,10 +370,10 @@ function renderDiff(repo, skill, story, diff) {
         const dels = [], adds = [];
         while (index < hunk.length && hunk[index].type !== ' ') (hunk[index].type === '-' ? dels : adds).push(hunk[index++].text);
         const kind = creditBlock(dels, adds, base, fallback); tally[kind]++;
-        const [title, brings] = LABELS[kind], effect = kind === 'harness' && !adds.length ? 'A sync removes these lines.' : brings;
+        const [title, brings] = LABELS[kind], effect = locked ? '' : kind === 'harness' && !adds.length ? 'A sync removes these lines.' : brings;
         const side = (label, lines, others, cls) => lines.length && el('div', `compare-side ${cls}`, el('span', 'compare-tag', label), ...lines.map((line, at) => el('div', 'compare-line', ...(line && others[at] !== undefined ? markWords(line, others[at]) : [line || ' ']))));
         body.append(el('div', `compare-change ${kind}`, el('p', 'compare-change-label', el('b', '', title), ` ${effect}`),
-          side(`${who} now`, dels, adds, 'del'), side('After a sync', adds, dels, 'add')));
+          side(`${who} now`, dels, adds, 'del'), side(locked ? 'Template copy' : 'After a sync', adds, dels, 'add')));
       }
       section.append(body);
     }
@@ -379,7 +382,7 @@ function renderDiff(repo, skill, story, diff) {
   const total = tally.repo + tally.harness + tally.both + tally.unknown;
   const parts = [tally.repo && `${tally.repo} made in ${who}`, tally.harness && `${tally.harness} newer in Harness-Firmware`, tally.both && `${tally.both} changed on both sides`].filter(Boolean);
   const summary = el('p', 'compare-summary', !files.length ? 'The two copies are identical.' : `${total} ${total === 1 ? 'difference' : 'differences'} in ${files.length} ${files.length === 1 ? 'file' : 'files'}${parts.length ? `: ${parts.join(', ')}` : ''}.${!exact && story?.base?.harness ? ' Both sides changed this skill, so each difference is credited by matching lines against the last shared copy; a moved or repeated line can be credited to the wrong side.' : ''}`);
-  const legend = el('div', 'compare-legend', el('span', 'key-repo', `Changed in ${who}`), el('span', 'key-harness', 'Newer in Harness-Firmware'), el('span', 'key-both', 'Both sides'), el('span', 'key-del', `Text in ${who} now`), el('span', 'key-add', 'Text after a sync'));
+  const legend = el('div', 'compare-legend', el('span', 'key-repo', `Changed in ${who}`), el('span', 'key-harness', 'Newer in Harness-Firmware'), el('span', 'key-both', 'Both sides'), el('span', 'key-del', `Text in ${who} now`), el('span', 'key-add', locked ? 'Template text' : 'Text after a sync'));
   const raw = el('details', 'compare-raw', el('summary', '', 'Raw diff'), el('pre', '', diff));
   $('syncDiff').replaceChildren(summary, legend, ...notes.map(note => el('p', 'compare-quiet', note)), ...sections, raw); $('syncCompare').scrollTop = 0;
 }

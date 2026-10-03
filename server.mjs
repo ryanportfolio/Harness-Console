@@ -140,7 +140,9 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
             try { active.results = await dshInstall({ preview, choices: request, dest: preview.dest, onOutput: output }); }
             catch (error) { active.results = error.results ?? null; throw error; }
           } else if (kind === 'sync-lock') {
-            active.results = [await lockSkill({ root, ...request, onOutput: output })];
+            // A pull request that opened but did not merge keeps its link, as a failed sync does.
+            try { active.results = [await lockSkill({ root, ...request, onOutput: output })]; }
+            catch (error) { active.results = error.branch ? [{ id: request.id, result: 'failed', branch: error.branch, ...(error.url && { url: error.url }) }] : null; throw error; }
           } else if (kind === 'sync') {
             try { active.results = await sync({ root, selection: request, onOutput: output }); }
             catch (error) { active.results = error.results ?? null; throw error; }

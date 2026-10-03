@@ -45,7 +45,8 @@ export function parseLocks(text) {
 }
 // A missing file locks nothing; one that cannot be read stops the repository instead of unlocking it.
 async function readLocks(git, rev) {
-  const present = await git(['cat-file', '-e', `${rev}:${LOCKS}`]).then(() => true, () => false);
+  // ls-tree prints nothing for a missing path and fails only when git cannot read the tree.
+  const present = (await git(['ls-tree', rev, '--', LOCKS])).trim() !== '';
   return present ? parseLocks(await git(['show', `${rev}:${LOCKS}`])) : new Map();
 }
 export const SKIP_FILE = fileURLToPath(new URL('./sync-skip.json', import.meta.url));
@@ -649,6 +650,13 @@ async function applyRepo({ template, clone, skipList, apply, remove, replace, ex
     if (has['sync-codex-skills.mjs']) {
       // The repository's own generator rebuilds its Codex adapters before the check.
       const wrote = await node(script('sync-codex-skills.mjs'), ['--write'], worktree, execute);
+      // The generator runs over every skill, so a locked skill's folders go back to main's copy before the check.
+      const kept = skills.filter(skill => skill.status === 'locked').flatMap(skill => PARTS.map(part => `${part}/${skill.name}`));
+      if (kept.length) {
+        const tracked = (await git(['ls-tree', '--name-only', 'HEAD', '--', ...kept])).split(/\r?\n/).filter(Boolean);
+        if (tracked.length) await git(['checkout', 'HEAD', '--', ...tracked]);
+        await git(['clean', '-fdq', '--', ...kept]);
+      }
       judge('sync-codex-skills.mjs --check', before.codex, wrote.ok ? await node(script('sync-codex-skills.mjs'), ['--check'], worktree, execute) : wrote);
     } else checks.push('- sync-codex-skills.mjs: not in this repository, not run');
     if (has['test-codex-contract.mjs']) judge('test-codex-contract.mjs', before.contract, await node(script('test-codex-contract.mjs'), [], worktree, execute));
@@ -742,6 +750,8 @@ export async function setSkillLock({ root, id, skill, lock, reason: why = '', ex
   try {
     await execute('git', ['-C', clone.folder, 'worktree', 'add', '--quiet', '--detach', worktree, head]);
     const full = path.join(worktree, ...LOCKS.split('/'));
+    // A tracked link would send the write outside the temporary checkout.
+    for (const where of [path.dirname(full), full]) if ((await lstat(where).catch(() => null))?.isSymbolicLink()) throw new Error(`${path.relative(worktree, where).replaceAll('\\', '/')} is a link in this repository; edit ${LOCKS} by hand.`);
     const locks = await exists(full) ? parseLocks(await readFile(full, 'utf8')) : new Map();
     if (lock ? locks.get(skill) === why : !locks.has(skill)) { say(`${skill} is already ${lock ? 'locked' : 'unlocked'}`); return { id, result: 'current' }; }
     if (lock) locks.set(skill, why); else locks.delete(skill);
