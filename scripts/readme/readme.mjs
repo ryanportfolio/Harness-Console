@@ -80,7 +80,7 @@ Nothing starts selected. Tick single skills, use a repository's **All updates an
 
 A repository can lock a skill so syncs leave it alone. **Lock** next to a skill writes its name and an optional reason to \`.agents/skill-locks.json\` in that repository and merges the change the same way a sync does. A locked skill moves to the **Locked** row with its reason and has no checkbox, so neither **Select all updates, additions and edited** nor a repository's box can pick it, and a sync started from a page shown before the lock skips it too. **Unlock** removes the entry. A lock file that cannot be read stops that repository with an error rather than unlocking its skills.
 
-Some repositories are never synced. \`sync-skip.json\` in this repository lists them with a reason: a frozen job take-home, a repository with no firmware files. Repositories archived on GitHub are skipped too; each Harness clone is looked up with \`gh api repos/<owner>/<name>\`. Skipped repositories appear on the tab with their reason, offer no skills to pick, and the server refuses them. When that lookup fails, or the repository's default branch is not \`main\`, the repository shows the error and cannot be synced.
+Some repositories are never synced. Each one is paused under \`projects\` in the settings file with a reason, such as a frozen job take-home or a repository with no firmware files; the first start imports the list Harness Console kept in \`sync-skip.json\`. Repositories archived on GitHub are skipped too; each Harness clone is looked up with \`gh api repos/<owner>/<name>\`. Skipped repositories appear on the tab with their reason, offer no skills to pick, and the server refuses them. When that lookup fails, or the repository's default branch is not \`main\`, the repository shows the error and cannot be synced.
 
 **Stale in worktrees** lists each checkout of a clone, the clone folder itself and every linked Git worktree, whose committed skill copies are an older template version than the repository's main. A session loads skills from its own checkout, so a branch cut before a skill sync keeps the old copies even when main is current. The list only reads Git metadata. Merge main into the branch to update it; copies edited in the branch are not listed.
 
@@ -94,8 +94,8 @@ Installs skills from the Harness-Firmware clone at \`~/CoreWise/Harness-Firmware
 
 ## Where state lives
 
-- \`~/CoreWise/\`: repository clones, including the Harness-Firmware clone the DSH tab reads.
-- \`~/.corewise-cloner/preferences.json\`: the last selected repository. No credentials.
+- \`settings.json\` in the app-data folder (\`%APPDATA%\\Harness Firmware\` on Windows): the workspace folder, paused projects and the last selected repository. No credentials. The first start imports \`~/CoreWise\`, \`~/.corewise-cloner/preferences.json\` and \`sync-skip.json\` from an existing install. A file that cannot be read stops every sync and lock, and the app never overwrites it.
+- The workspace folder (\`~/CoreWise/\` for an existing install): repository clones, including the Harness-Firmware clone the DSH tab reads.
 - \`~/.corewise-cloner/harness-firmware.git\`: the template cache for Skill sync.
 - \`~/.corewise-cloner/dsh-installs.json\` and \`dsh-backups/\`: what the DSH tab installed, and the copies it replaced.
 - \`usage/.state/\`: the tracker's snapshots, token cache and price table.
@@ -113,7 +113,7 @@ node --test test/*.test.mjs
 The tests use temporary local Git repositories and an injected GitHub adapter, so they do not prove live GitHub access or private repository authorization. For an isolated manual run, start the app server alone with its own folders; it does not start the tracker:
 
 \`\`\`bash
-node server.mjs --port 43128 --root "C:\\path\\to\\test-clones" --preferences "C:\\path\\to\\test-preferences.json" --open
+node server.mjs --port 43128 --root "C:\\path\\to\\test-clones" --settings "C:\\path\\to\\test-settings.json" --open
 \`\`\`
 
 ## Usage tracker

@@ -36,7 +36,7 @@ test('launcher starts when down and repeated launches preserve an active clone',
 });
 
 test('launcher replaces an idle instance with a fresh server on the same port', async t => {
-  const app = () => createApp({ adapter: { account: async () => ({ connected: true }) }, preferences: 'nonexistent-fixture-preferences' });
+  const app = () => createApp({ adapter: { account: async () => ({ connected: true }) }, settingsFile: null });
   const first = await launchHarnessConsole({ port: 0, open: () => {}, createServer: app });
   const port = first.server.address().port;
   const closed = new Promise(resolve => first.server.once('close', resolve));
@@ -85,7 +85,7 @@ test('startLatest leaves the files alone while a running instance refuses to qui
 });
 
 test('startLatest stops an idle instance before updating, then relaunches when main moved', async t => {
-  const first = await launchHarnessConsole({ port: 0, open: () => {}, createServer: () => createApp({ adapter: { account: async () => ({ connected: true }) }, preferences: 'nonexistent-fixture-preferences' }) });
+  const first = await launchHarnessConsole({ port: 0, open: () => {}, createServer: () => createApp({ adapter: { account: async () => ({ connected: true }) }, settingsFile: null }) });
   const port = first.server.address().port;
   const closed = new Promise(resolve => first.server.once('close', resolve));
   const calls = [];

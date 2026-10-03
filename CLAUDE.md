@@ -43,7 +43,7 @@ Core tells, banned at write time:
 ## CRITICAL: Verification
 
 - Authoritative signals: `node --test test/*.test.mjs` locally and in CI (`.github/workflows/test.yml`, Windows); `node scripts/readme/build.mjs` for README and panels (CI `readme.yml` fails when the output differs from the commit). No install, build or type-check step exists: Node built-ins only, no `package.json`.
-- UI checks run against a second server from the worktree: `node server.mjs --port <spare port> --root <dir> --preferences .tmp/prefs.json`. For `usage/` changes, also start `node usage/server.mjs` and set the same spare `USAGE_PORT` for both processes; otherwise the Usage tab loads the user's own tracker on 4545. Never `node launcher.mjs` for a check: it asks the user's running console on 43127 to quit and replaces it.
+- UI checks run against a second server from the worktree: `node server.mjs --port <spare port> --root <dir> --settings .tmp/settings.json`. For `usage/` changes, also start `node usage/server.mjs` and set the same spare `USAGE_PORT` for both processes; otherwise the Usage tab loads the user's own tracker on 4545. Never `node launcher.mjs` for a check: it asks the user's running console on 43127 to quit and replaces it.
 - Clone, sync and create write to real GitHub repositories. Tests stub `gh` and use local bare remotes; a check against real clones refuses `git push` and `gh pr` in its `execute` wrapper. Only the user's click in the console writes to GitHub.
 - Inspect logs / run scripts / read code yourself before claiming anything works.
 - Never claim visual/UI verification you didn't actually perform.
