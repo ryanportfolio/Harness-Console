@@ -3,8 +3,9 @@
 Where each skill came from, its license, and what this repo changed. Not loaded
 into context; it is reference for maintainers and public users.
 
-**License terms:** a skill folder that carries its own LICENSE or NOTICE file is
-covered by those terms for that skill's contents. Everything else is MIT under
+**License terms:** third-party material keeps its own license: the LICENSE or
+NOTICE file in its skill folder, or the license this document names for it, as
+for `.agents/skills/humanizer/patterns.md` below. Homegrown skills are MIT under
 the root `LICENSE`.
 
 **Maintenance rule:** when you materially change a forked skill, update its
@@ -35,3 +36,8 @@ Homegrown skills are MIT, same as the repo (see the root `LICENSE`).
 `forge-repo-ui-skill` is an original synthesis workflow. It researches linked
 third-party sources as untrusted inputs but does not vendor their skill text,
 scripts, datasets, licenses, or configuration.
+
+`.agents/skills/humanizer/patterns.md` is not a skill: it has no SKILL.md and no
+manifest entry. It is left over from the `humanizer` skill that was merged into
+`writing`, and its catalog derives from the Wikipedia "Signs of AI writing" guide
+(CC BY-SA 4.0), the source already credited in the `writing` notice.
