@@ -29,6 +29,7 @@
 /* Skill names open a diff of the repository copy against the template copy. */
 .sync-name{text-decoration:underline dotted;text-underline-offset:4px;text-decoration-thickness:1px;font-weight:inherit;color:inherit}.sync-name:hover{text-decoration-style:solid}
 .sync-skills .sync-name.plain{color:var(--bronze)}
+.sync-lock{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--bronze);border:1px solid currentColor;border-radius:999px;padding:1px 8px;line-height:1.5}.sync-lock:hover:not(:disabled){color:var(--ink)}.sync-lock:disabled{opacity:.5;cursor:default}
 .sync-compare{width:min(1100px,92vw);max-height:86vh;border:1px solid var(--ink);border-radius:0;background:var(--sand);color:var(--ink);padding:24px 30px}
 .sync-compare::backdrop{background:rgba(30,33,30,.35)}
 /* Compare view: who changed what (story), then each difference credited to the side that made it. */

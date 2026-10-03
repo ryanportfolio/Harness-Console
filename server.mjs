@@ -7,13 +7,13 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { cloneMain, github, localState, updateMain, validateRepo } from './core.mjs';
 import { createProject, skillCatalog } from './harness.mjs';
-import { applySkills, compareSkill, normalizeSelection, scanSkills, skillStory } from './sync.mjs';
+import { applySkills, compareSkill, normalizeLock, normalizeSelection, scanSkills, setSkillLock, skillStory } from './sync.mjs';
 import { compareDsh, installDsh, normalizeChoices, previewDsh } from './dsh.mjs';
 import { TRACKER } from './launcher.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/new-project.css': ['new-project.css', 'text/css'], '/sync.css': ['sync.css', 'text/css'] };
-export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapter = github(), clone = cloneMain, update = updateMain, local = localState, create = createProject, catalog = skillCatalog, scan = scanSkills, sync = applySkills, compareSync = compareSkill, storySync = skillStory, dshPreview = previewDsh, dshInstall = installDsh, dshCompare = compareDsh, preferences = path.join(homedir(), '.corewise-cloner', 'preferences.json'), build = null } = {}) {
+export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapter = github(), clone = cloneMain, update = updateMain, local = localState, create = createProject, catalog = skillCatalog, scan = scanSkills, sync = applySkills, lockSkill = setSkillLock, compareSync = compareSkill, storySync = skillStory, dshPreview = previewDsh, dshInstall = installDsh, dshCompare = compareDsh, preferences = path.join(homedir(), '.corewise-cloner', 'preferences.json'), build = null } = {}) {
   const token = randomBytes(32).toString('hex');
   let repos = [], lastSelected = null, job = null, skills = null, lastScan = null, lastDsh = null;
   // DSH installs read the local Harness-Firmware checkout; the preview keeps the rendered bytes,
@@ -93,7 +93,7 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
         server.close();
         return;
       }
-      if (!['/api/clone', '/api/update', '/api/login', '/api/create', '/api/sync', '/api/dsh'].includes(url.pathname)) return reply(res, 404, { error: 'Not found.' });
+      if (!['/api/clone', '/api/update', '/api/login', '/api/create', '/api/sync', '/api/sync-lock', '/api/dsh'].includes(url.pathname)) return reply(res, 404, { error: 'Not found.' });
       if (job?.status === 'running') return reply(res, 409, { error: 'An operation is already running.' });
       const kind = url.pathname.slice('/api/'.length);
       if (kind === 'clone' || kind === 'update') { validateRepo(body.id); if (!repos.some(repo => repo.id === body.id)) throw new Error('Refresh and select a repository from your account.'); }
@@ -101,6 +101,12 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
       if (kind === 'dsh') {
         request = normalizeChoices(body.skills);
         if (!lastDsh || body.previewId !== lastDsh.id || request.some(item => !lastDsh.skills.some(skill => skill.name === item.name))) throw new Error('Check DSH skills again before installing.');
+      }
+      if (kind === 'sync-lock') {
+        request = normalizeLock(body);
+        // Only a skill the page was shown can be locked or unlocked, in a repository the scan could check.
+        const scanned = lastScan?.repos.find(repo => repo.id === request.id);
+        if (!scanned?.skills?.some(skill => skill.name === request.skill)) throw new Error('Check repositories again before changing a lock.');
       }
       if (kind === 'sync') {
         request = normalizeSelection(body.repos);
@@ -133,6 +139,10 @@ export async function createApp({ root = path.join(homedir(), 'CoreWise'), adapt
             const preview = lastDsh; lastDsh = null;
             try { active.results = await dshInstall({ preview, choices: request, dest: preview.dest, onOutput: output }); }
             catch (error) { active.results = error.results ?? null; throw error; }
+          } else if (kind === 'sync-lock') {
+            // A pull request that opened but did not merge keeps its link, as a failed sync does.
+            try { active.results = [await lockSkill({ root, ...request, onOutput: output })]; }
+            catch (error) { active.results = error.branch ? [{ id: request.id, result: 'failed', branch: error.branch, ...(error.url && { url: error.url }) }] : null; throw error; }
           } else if (kind === 'sync') {
             try { active.results = await sync({ root, selection: request, onOutput: output }); }
             catch (error) { active.results = error.results ?? null; throw error; }
