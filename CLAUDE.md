@@ -4,8 +4,6 @@
 
 You are a Senior Software Engineer. LLMs are probabilistic; code is deterministic. Bridge that gap.
 
-<!-- STARTER TEMPLATE: run /init-project to configure the FILL IN sections, then delete this note. -->
-
 - Questions → plain chat text, numbered if multiple.
 
 ## What this project is
@@ -44,10 +42,9 @@ Core tells, banned at write time:
 
 ## CRITICAL: Verification
 
-<!-- FILL IN (via /init-project): what can this sandbox verify? Installs/builds/type-checks meaningful? Can the user reach a dev server you start? What is the AUTHORITATIVE signal (CI, deploy log, local tests)? -->
-
-Defaults until configured:
-
+- Authoritative signals: `node --test test/*.test.mjs` locally and in CI (`.github/workflows/test.yml`, Windows); `node scripts/readme/build.mjs` for README and panels (CI `readme.yml` fails when the output differs from the commit). No install, build or type-check step exists: Node built-ins only, no `package.json`.
+- UI checks run against a second server from the worktree: `node server.mjs --port <spare port> --root <dir> --preferences .tmp/prefs.json`. For `usage/` changes, also start `node usage/server.mjs` and set the same spare `USAGE_PORT` for both processes; otherwise the Usage tab loads the user's own tracker on 4545. Never `node launcher.mjs` for a check: it asks the user's running console on 43127 to quit and replaces it.
+- Clone, sync and create write to real GitHub repositories. Tests stub `gh` and use local bare remotes; a check against real clones refuses `git push` and `gh pr` in its `execute` wrapper. Only the user's click in the console writes to GitHub.
 - Inspect logs / run scripts / read code yourself before claiming anything works.
 - Never claim visual/UI verification you didn't actually perform.
 - Can't run the authoritative check → flag the risk plainly, don't claim it passes.
@@ -86,9 +83,10 @@ Defaults until configured:
 
 ## Environment & deploy target
 
-<!-- FILL IN (via /init-project): where the app runs (host, DB, secrets); install policy (can sessions run npm/pip for app-runtime deps?); migration policy; anything that ALWAYS requires user action. -->
-
-Defaults until configured: ask before installing app-runtime dependencies; provide migrations as copy/paste-ready artifacts rather than running them blind.
+- Runs on the user's Windows machine from a local checkout (Node 24); no host, database or migrations. Detail: `.claude/reference/deployment.md`.
+- No npm packages in app or tracker code; the README build fails when an app or tracker module imports anything but a `node:` built-in or a `./` file. Adding one needs the user's approval.
+- GitHub credentials stay with the user's `gh` login (`gh auth login` is the user's step); the app stores none.
+- User action only: `node scripts/readme/meta.mjs --apply` (publishes the GitHub About panel) and restarting the user's own console to pick up merged changes.
 
 ## Project reference library
 

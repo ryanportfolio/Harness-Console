@@ -40,6 +40,9 @@
     "compact-review": "disabled",
     "long-horizon-swarm": "disabled",
     "external-review": "native",
-    "opus-fullreview": "native"
+    "opus-fullreview": "native",
+    "merge": "disabled",
+    "servers": "native",
+    "wrapup": "native"
   }
 }
