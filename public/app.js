@@ -405,7 +405,7 @@ async function changeLock(repo, skill, lock) {
   if (lock) { const answer = prompt(`Lock ${skill.name} in ${repo.name}? Skill sync will leave it as it is, including Select all. This merges a change to .agents/skill-locks.json on GitHub.\n\nReason (optional):`, ''); if (answer === null) return; reason = answer.trim().slice(0, 300); }
   else if (!confirm(`Unlock ${skill.name} in ${repo.name}? Skill sync can update it again. This merges a change to .agents/skill-locks.json on GitHub.`)) return;
   try { await api('sync-lock', { id: repo.id, skill: skill.name, lock, reason }); lastJobStatus = undefined; await poll(); }
-  catch (error) { $('syncActivity').hidden = false; $('syncActivityTitle').textContent = 'Lock needs attention'; $('syncJobState').textContent = ''; $('syncLog').textContent = error.message; }
+  catch (error) { showSyncError('Lock needs attention', error.message); }
 }
 function lockButton(repo, skill, lock) {
   const button = document.createElement('button'); button.type = 'button'; button.className = 'sync-lock'; button.dataset.lock = '';
@@ -523,7 +523,12 @@ async function applySync() {
   if (!sync.armed) { sync.armed = true; renderSyncFoot(); return; }
   sync.armed = false;
   try { await api('sync', { repos: selection }); lastJobStatus = undefined; await poll(); }
-  catch (error) { $('syncActivity').hidden = false; $('syncActivityTitle').textContent = 'Sync needs attention'; $('syncJobState').textContent = ''; $('syncResults').hidden = true; $('syncLogBox').open = true; $('syncLog').textContent = error.message; renderSyncFoot(); }
+  catch (error) { showSyncError('Sync needs attention', error.message); renderSyncFoot(); }
+}
+// A rejected request has no job: drop the previous job's results and show the error in the open log.
+function showSyncError(title, message) {
+  $('syncActivity').hidden = false; $('syncActivityTitle').textContent = title; $('syncJobState').textContent = '';
+  $('syncResults').hidden = true; $('syncLogBox').open = true; $('syncLog').textContent = message;
 }
 // Links only to GitHub pull request pages, the one kind of url sync.mjs returns.
 function prLink(item, text) {
