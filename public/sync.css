@@ -1,7 +1,6 @@
 /* Skill sync view: one hairline-ruled block per repository, skills as checkable words. */
 #syncView,#dshView{display:block;margin-top:40px;max-width:1432px}
-.sync-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap}
-.sync-note{max-width:65ch;font-size:16px;line-height:1.5;color:var(--bronze);margin:20px 0 30px}
+.sync-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap;margin-bottom:30px}
 .sync-tools{display:flex;gap:26px;flex-wrap:wrap;margin:0 0 20px}
 .sync-repo{border-top:1px solid var(--ink);padding:20px 0 24px}
 .sync-repo-head{display:flex;align-items:baseline;gap:20px;flex-wrap:wrap}.sync-repo-head h2{font-size:24px}.sync-repo-head .pill{margin-right:auto}
@@ -69,4 +68,9 @@
 .compare-raw{margin-top:10px;font-size:14px}.compare-raw summary{cursor:pointer;color:var(--bronze)}
 .compare-raw pre{font:12px/1.5 Consolas,"Cascadia Mono",ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0}
 @media(max-width:760px){.compare-cards{grid-template-columns:1fr}.compare-arrow{flex-direction:row;gap:8px}}
-.sync-links{margin:14px 0 0;padding-left:20px;font-size:15px;line-height:1.8}.sync-links a{color:inherit}
+.sync-results{margin-top:14px}.sync-result{display:grid;grid-template-columns:190px minmax(0,1fr);gap:20px;padding:12px 0;border-top:1px solid var(--wheat)}.sync-result:first-child{border-top:0;padding-top:0}
+.sync-result h3{margin:0;font-size:14px;font-weight:400;letter-spacing:.06em;text-transform:uppercase;color:var(--bronze)}.sync-result.failed h3{color:#a04030}
+.sync-result ul{list-style:none;margin:0;padding:0;font-size:15px;line-height:1.6}.sync-result li+li{margin-top:6px}.sync-result.failed li{border-left:4px solid #a04030;padding-left:12px}.sync-result.failed li+li{margin-top:12px}
+.sync-result strong{font-weight:500}.sync-result a{color:inherit}.sync-result .why{display:block;color:var(--ink);overflow-wrap:anywhere}.sync-result p{margin:0;font-size:15px;line-height:1.6;overflow-wrap:anywhere}
+.sync-log{margin-top:14px;font-size:14px}.sync-log summary{cursor:pointer;color:var(--bronze)}.sync-log pre{margin-top:8px}
+@media(max-width:760px){.sync-result{grid-template-columns:1fr;gap:6px}}

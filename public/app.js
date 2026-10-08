@@ -405,7 +405,7 @@ async function changeLock(repo, skill, lock) {
   if (lock) { const answer = prompt(`Lock ${skill.name} in ${repo.name}? Skill sync will leave it as it is, including Select all. This merges a change to .agents/skill-locks.json on GitHub.\n\nReason (optional):`, ''); if (answer === null) return; reason = answer.trim().slice(0, 300); }
   else if (!confirm(`Unlock ${skill.name} in ${repo.name}? Skill sync can update it again. This merges a change to .agents/skill-locks.json on GitHub.`)) return;
   try { await api('sync-lock', { id: repo.id, skill: skill.name, lock, reason }); lastJobStatus = undefined; await poll(); }
-  catch (error) { $('syncActivity').hidden = false; $('syncActivityTitle').textContent = 'Lock needs attention'; $('syncJobState').textContent = ''; $('syncLog').textContent = error.message; }
+  catch (error) { showSyncError('Lock needs attention', error.message); }
 }
 function lockButton(repo, skill, lock) {
   const button = document.createElement('button'); button.type = 'button'; button.className = 'sync-lock'; button.dataset.lock = '';
@@ -523,18 +523,43 @@ async function applySync() {
   if (!sync.armed) { sync.armed = true; renderSyncFoot(); return; }
   sync.armed = false;
   try { await api('sync', { repos: selection }); lastJobStatus = undefined; await poll(); }
-  catch (error) { $('syncActivity').hidden = false; $('syncActivityTitle').textContent = 'Sync needs attention'; $('syncJobState').textContent = ''; $('syncLog').textContent = error.message; renderSyncFoot(); }
+  catch (error) { showSyncError('Sync needs attention', error.message); renderSyncFoot(); }
+}
+// A rejected request has no job: drop the previous job's results and show the error in the open log.
+function showSyncError(title, message) {
+  $('syncActivity').hidden = false; $('syncActivityTitle').textContent = title; $('syncJobState').textContent = '';
+  $('syncResults').hidden = true; $('syncLogBox').open = true; $('syncLog').textContent = message;
+}
+// Links only to GitHub pull request pages, the one kind of url sync.mjs returns.
+function prLink(item, text) {
+  if (!/^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+$/.test(item.url ?? '')) return null;
+  const a = el('a', '', text ?? `pull request #${item.url.split('/').pop()}`); a.href = item.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a;
+}
+// The outcome per repository, failures first with their reason; the raw log stays behind "Full log".
+function renderSyncResults(results) {
+  const failed = results.filter(item => item.result === 'failed'), merged = results.filter(item => item.result === 'merged'), current = results.filter(item => item.result === 'current');
+  const block = (className, label, ...body) => el('section', `sync-result ${className}`, el('h3', '', label), ...body);
+  const blocks = [];
+  if (failed.length) blocks.push(block('failed', `Failed (${failed.length})`, el('ul', '', ...failed.map(item => el('li', '', el('strong', '', item.id),
+    el('span', 'why', item.error || 'Failed; see the full log.'),
+    prLink(item, `Open pull request #${item.url?.split('/').pop()}`) ?? (item.branch ? el('span', 'why', `Branch ${item.branch} is on GitHub.`) : null))))));
+  if (merged.length) blocks.push(block('merged', `Merged (${merged.length})`, el('ul', '', ...merged.map(item => el('li', '', `${item.id}: `, prLink(item) ?? 'merged')))));
+  if (current.length) blocks.push(block('current', `Already current (${current.length})`, el('p', '', current.map(item => item.id).join(', '))));
+  $('syncResults').replaceChildren(...blocks); $('syncResults').hidden = !blocks.length;
+  return { failed: failed.length, total: results.length };
 }
 function renderSyncJob(job) {
   $('syncActivity').hidden = false;
-  const lock = job.kind === 'sync-lock';
-  $('syncActivityTitle').textContent = job.status === 'running' ? (lock ? 'Updating skill lock' : 'Syncing skills') : job.status === 'complete' ? (lock ? 'Skill lock updated' : 'Skills synced') : lock ? 'Lock needs attention' : 'Sync needs attention';
-  $('syncJobState').textContent = job.status === 'running' ? 'In progress' : job.status === 'complete' ? 'Complete' : 'Failed';
+  const lock = job.kind === 'sync-lock', done = job.status !== 'running';
+  const { failed, total } = done && job.results?.length ? renderSyncResults(job.results) : (renderSyncResults([]), { failed: 0, total: 0 });
+  const many = !lock && total > 1;
+  $('syncActivityTitle').textContent = !done ? (lock ? 'Updating skill lock' : 'Syncing skills')
+    : job.status === 'complete' ? (lock ? 'Skill lock updated' : many ? `${count(total, 'repository', 'repositories')} synced` : 'Skills synced')
+    : many && failed ? `${failed} of ${count(total, 'repository', 'repositories')} failed` : lock ? 'Lock needs attention' : 'Sync needs attention';
+  $('syncJobState').textContent = !done ? 'In progress' : job.status === 'complete' ? 'Complete' : many && failed < total ? `${total - failed} succeeded` : 'Failed';
   $('syncLog').textContent = job.log || 'Starting…'; $('syncLog').scrollTop = $('syncLog').scrollHeight;
-  // Links only to GitHub pull request pages, the one kind of url sync.mjs returns.
-  const prs = (job.results ?? []).filter(item => /^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+$/.test(item.url ?? ''));
-  $('syncLinks').replaceChildren(...prs.map(item => { const a = el('a', '', `${item.id}: ${item.result === 'merged' ? 'merged' : 'open'} pull request from ${item.branch}`); a.href = item.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; return el('li', '', a); }));
-  $('syncLinks').hidden = !prs.length;
+  // The log is open while a job runs or when no per-repository outcome exists; it folds once results show.
+  if (job.status !== lastJobStatus) $('syncLogBox').open = !done || $('syncResults').hidden;
   $('syncScan').disabled = busy || sync.scanning; renderSyncFoot();
   if (job.status !== 'running' && lastJobStatus === 'running') void scanSync();
 }

@@ -43,16 +43,14 @@
 </div>
 <div id="syncView" role="tabpanel" hidden>
   <div class="sync-head"><div><div class="eyebrow" id="syncTemplate">Harness-Firmware main</div><h1>Skill sync</h1></div><button id="syncScan" class="primary" type="button">Check repositories <span>↻</span></button></div>
-  <p id="syncNote" class="sync-note">Compares each Harness repository cloned in your CoreWise folder with the template on GitHub. Skills edited in that repository stay as they are unless you choose to replace them with the template copy. Each repository gets a pull request from a new branch after its own checks run, merged into main straight away; your local folders are not touched. Repositories in the skip list or archived on GitHub are listed but never changed.</p>
   <div id="syncTools" class="sync-tools" hidden><button id="syncSelectAll" class="quiet" type="button">Select all updates, additions and edited</button><button id="syncClearAll" class="quiet" type="button">Unselect all</button></div>
   <div id="syncRepos"></div>
   <dialog id="syncCompare" class="sync-compare" aria-labelledby="syncCompareTitle"><div class="activity-heading"><h2 id="syncCompareTitle">Compare</h2><button id="syncCompareClose" class="quiet" type="button">Close</button></div><div id="syncStory" class="compare-story"></div><div id="syncDiff" class="compare-diff" tabindex="0"></div></dialog>
   <div id="syncFoot" class="sync-foot" hidden><span id="syncSummary"></span><button id="syncApply" class="primary" type="button">Sync and merge <span>↑</span></button></div>
-  <section id="syncActivity" class="activity" hidden aria-live="polite"><div class="activity-heading"><h2 id="syncActivityTitle">Syncing skills</h2><span id="syncJobState" class="pill"></span></div><pre id="syncLog" tabindex="0"></pre><ul id="syncLinks" class="sync-links" hidden></ul></section>
+  <section id="syncActivity" class="activity" hidden aria-live="polite"><div class="activity-heading"><h2 id="syncActivityTitle">Syncing skills</h2><span id="syncJobState" class="pill"></span></div><div id="syncResults" class="sync-results" hidden></div><details id="syncLogBox" class="sync-log" open><summary>Full log</summary><pre id="syncLog" tabindex="0"></pre></details></section>
 </div>
 <div id="dshView" role="tabpanel" hidden>
   <div class="sync-head"><div><div class="eyebrow" id="dshSource">Harness-Firmware main</div><h1>DSH skills</h1></div><button id="dshScan" class="primary" type="button">Check DSH skills <span>↻</span></button></div>
-  <p class="sync-note">Installs skills from the Harness-Firmware checkout in your CoreWise folder into the DSH global skill folder, read from its main branch on GitHub after a fetch. Nothing is pushed or uploaded. A skill changed in DSH is only replaced when you pick it, and its old copy is backed up unless you turn that off.</p>
   <div id="dshTools" class="sync-tools" hidden><button id="dshSelectAll" class="quiet" type="button">Select all new and updates</button><button id="dshClearAll" class="quiet" type="button">Unselect all</button></div>
   <div id="dshList"></div>
   <section id="dshCompare" class="activity" hidden><div class="activity-heading"><h2 id="dshCompareTitle">Compare</h2><button id="dshCompareClose" class="quiet" type="button">Close</button></div><pre id="dshDiff" tabindex="0"></pre></section>
