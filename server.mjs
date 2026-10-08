@@ -161,7 +161,7 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
           } else if (kind === 'sync-lock') {
             // A pull request that opened but did not merge keeps its link, as a failed sync does.
             try { active.results = [await lockSkill({ root, ...request, skip, onOutput: output })]; }
-            catch (error) { active.results = error.branch ? [{ id: request.id, result: 'failed', branch: error.branch, ...(error.url && { url: error.url }) }] : null; throw error; }
+            catch (error) { active.results = error.branch ? [{ id: request.id, result: 'failed', error: error.message, branch: error.branch, ...(error.url && { url: error.url }) }] : null; throw error; }
           } else if (kind === 'sync') {
             try { active.results = await sync({ root, selection: request, skip, onOutput: output }); }
             catch (error) { active.results = error.results ?? null; throw error; }
