@@ -145,7 +145,9 @@ The Status column reads the first of these that applies:
 
 - **Disabled in proxy**: the login is disabled in CLIProxyAPI. The tracker does not fetch it and keeps any numbers it had.
 - **As of** and an age: the row has earlier numbers but the last fetch failed, the proxy is down, or the tracker has just started from its saved snapshot. This holds even when the proxy flags the login. The row keeps the last numbers it had, each shown as "Last: N%", with the error under them, or in the banner when the proxy is down.
-- **Sign-in needed**: the proxy flags the login or marks it unavailable, or the fetch failed with no earlier numbers to show.
+- **Proxy unreachable**: the tracker cannot reach the proxy or its management key is missing or refused, and the row has no earlier numbers. The row is greyed and offers no sign-in.
+- **Rate limited**: the usage API answered 429 and the row has no earlier numbers. Under it: the time the login can be fetched again. Nothing fetches it at that time on its own; the next page load, **Refresh now** or sign-in watch does.
+- **Sign-in needed**: the proxy flags the login or marks it unavailable, or the fetch failed for another reason with no earlier numbers to show.
 - **Live**: the last fetch worked, and the proxy neither flags the login nor marks it unavailable.
 
 A window whose reset time has passed shows its last number as "Last: N%" and "current reset unknown" until the next fetch. Two proxy logins for the same account both appear, each warned "Same account as another login in the proxy."
@@ -157,8 +159,8 @@ When a login needs attention (the proxy flags it, marks it unavailable, or its u
 ### Polling
 
 - There is no poll timer. Each login is fetched at startup, on every page load, on **Refresh now** and every 5 seconds during a sign-in watch. Refreshes that arrive while a poll runs share it.
-- A login that fetched fine less than 60 seconds ago, and that the proxy does not flag, keeps its numbers instead of being fetched again, so a sign-in watch does not refetch every account every 5 seconds.
-- A 429 from a usage API parks that login for the response's Retry-After time, or 5 minutes without one.
+- A login that fetched fine less than 60 seconds ago, that the proxy does not flag and does not mark unavailable, keeps its numbers instead of being fetched again, so a sign-in watch does not refetch every account every 5 seconds.
+- A 429 from a usage API parks that login for the response's Retry-After time, or 5 minutes without one. Polls in that time do not call the API for it; the first poll after it does.
 - The Claude plan comes from the profile endpoint, fetched after a login's usage call succeeds and then kept for as long as the tracker runs. A failed profile fetch is not kept, so the login's next successful usage fetch asks again.
 - Transcripts are rescanned every 300 seconds and on every refresh. One scan runs at a time, and a refresh does not wait for it; while it runs, the token panels say "scanning...".
 

@@ -68,7 +68,7 @@
   .bar > i { display: block; height: 100%; border-radius: 0; background: var(--ok); transition: width .4s; }
   .bar.warn > i { background: var(--warn); } .bar.bad > i { background: var(--bad); }
   .reset { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  /* Stale (failed fetch, proxy down) and disabled rows keep their last numbers, faded, with dashed bars. */
+  /* Stale (failed fetch, proxy down) and disabled rows keep their last numbers, faded, with dashed bars; a row with no numbers while the proxy is down fades too. */
   tr.dim td.acct, tr.dim td.cell { opacity: .5; }
   tr.dim .bar { background: repeating-linear-gradient(90deg, var(--track) 0 6px, transparent 6px 9px); }
   tr.dim .bar > i { -webkit-mask: repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 9px); mask: repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 9px); }
@@ -215,7 +215,7 @@
       + (c.error ? `<div class="error">${esc(c.error)}</div>` : "") + signin;
     const sub = [c.plan, c.meta].filter(Boolean).join(" · ");
     return `
-      <tr class="${c.stale || c.disabled ? "dim" : ""}" data-id="${esc(c.id)}">
+      <tr class="${c.dim ? "dim" : ""}" data-id="${esc(c.id)}">
         <td class="acct">
           <div class="name" title="${esc(c.title)}">${esc(c.title)}</div>
           <div class="sub"><span class="dot ${esc(c.kind)}"></span><span class="plan" title="${esc(sub)}">${esc(sub)}</span></div>
@@ -298,7 +298,7 @@
     const r = await watchForLogin({ poll, knownIds, targetId, intervalMs: 5000, timeoutMs: 600000 });
     await load();
     signins.delete(key);
-    // A second login with the same email renames both rows (id gets #auth_index); report in the header then.
+    // The row can be gone by now (the login was removed in the proxy); report in the header then.
     const where = key && last.accounts.some((a) => a.id === key) ? key : "";
     signins.set(where, { text: r.found ? `Signed in as ${r.account.email || r.account.label || r.account.id}` : "No new sign-in seen; try again", waiting: false });
     render();

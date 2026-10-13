@@ -69,8 +69,13 @@ export function collectFacts() {
     if (!name) throw new Error(`facts: no README colour name for --${k} ${barColors[k]} in usage/index.html`);
     return [k, name];
   }));
-  // Status order the README states: disabled, then stale ("As of"), then sign-in needed, then live.
-  must(cards, /statusText: a\.disabled \? "Disabled in proxy" : stale \? `As of [^`]*` : broken \? "Sign-in needed" : "Live"/, "usage/cards.mjs status order changed");
+  // Status order the README states: disabled, stale ("As of"), proxy unreachable, rate limited, sign-in needed, live.
+  must(cards, /statusText: a\.disabled \? "Disabled in proxy" : stale \? `As of [^`]*` : !proxy\.ok \? "Proxy unreachable" : rateLimited \? "Rate limited" : broken \? "Sign-in needed" : "Live"/, "usage/cards.mjs status order changed");
+  must(cards, /const rateLimited = !a\.ok && !!a\.rateLimited;/, "usage/cards.mjs no longer reads the server's rate-limit flag");
+  must(cards, /panelUrl && !rateLimited \?/, "usage/cards.mjs offers sign-in to a rate-limited login now");
+  must(cards, /dim: stale \|\| !!a\.disabled \|\| \(!proxy\.ok && !d\)/, "usage/cards.mjs greys different rows now");
+  // The refetch skip conditions the README lists.
+  must(server, /if \(prev\?\.ok && !entry\.proxyMessage && !entry\.unavailable && prev\.fetchedAt && Date\.now\(\) - Date\.parse\(prev\.fetchedAt\) < REFETCH_HEALTHY_MS\)/, "usage/server.mjs skips a refetch on different conditions now");
   // Retry claims: a failed profile fetch is not cached; a failed price fetch leaves fetchedAt alone.
   must(server, /catch \{ return ""; \}[^\n]*\n\s*if \(!r\.ok \|\| !r\.json\) return "";[\s\S]{0,400}claudePlans\.set\(/, "usage/server.mjs caches a failed Claude profile fetch now");
   must(pricing, /if \(!force && Date\.now\(\) - this\.fetchedAt < TTL_MS\) return;/, "usage/pricing.mjs TTL check changed");

@@ -53,15 +53,17 @@ function retryAfterMs(headers, fallbackMs) {
   return Number.isFinite(t) ? Math.max(0, t - Date.now()) : fallbackMs;
 }
 
+// A 429 parks the login until `retryAt`. Nothing fetches it when that passes; the next poll does, and
+// the page works out how long is left from the timestamp.
+const rateLimited = (state) => Object.assign(new Error("rate limited by usage API"), { retryAt: state.backoffUntil });
+
 // One usage call through the proxy with the shared error handling: 429 parks the account.
-async function usageBody(file, state) {
-  if (state.backoffUntil && Date.now() < state.backoffUntil) throw new Error(state.backoffReason);
-  const r = await upstreamGet(file.auth_index, file.provider, "usage");
+async function usageBody(file, state, accountId = null) {
+  if (state.backoffUntil && Date.now() < state.backoffUntil) throw rateLimited(state);
+  const r = await upstreamGet(file.auth_index, file.provider, "usage", accountId);
   if (r.status === 429) {
-    const ms = retryAfterMs(r.headers, RATE_LIMIT_BACKOFF_MS);
-    state.backoffUntil = Date.now() + ms;
-    state.backoffReason = `rate limited by usage API; retrying in ${Math.round(ms / 1000)}s`;
-    throw new Error(state.backoffReason);
+    state.backoffUntil = Date.now() + retryAfterMs(r.headers, RATE_LIMIT_BACKOFF_MS);
+    throw rateLimited(state);
   }
   if (r.status === 401) throw new Error("usage API 401: the proxy's token for this login was rejected; sign in again in the proxy panel");
   if (!r.ok) throw new Error(`usage API ${r.status}: ${r.text.slice(0, 160)}`);
@@ -99,7 +101,8 @@ function claudeWindows(j) {
 
 const CLAUDE_PLAN = { claude_max: "Claude Max", claude_pro: "Claude Pro", claude_team: "Claude Team", claude_enterprise: "Claude Enterprise" };
 
-// The plan never changes under one login, so the profile is fetched once per login per process.
+// The plan never changes under one login, so a successful profile fetch is kept for the life of the
+// process. A failed one is not kept: the login's next successful usage fetch asks again.
 const claudePlans = new Map(); // auth_index -> plan
 async function claudePlan(file) {
   if (claudePlans.has(file.auth_index)) return claudePlans.get(file.auth_index);
@@ -162,7 +165,7 @@ function codexWindows(j) {
 }
 
 async function codexFetch(file, state) {
-  const j = await usageBody(file, state);
+  const j = await usageBody(file, state, file.id_token?.chatgpt_account_id);
   return { plan: codexPlan(file.id_token?.plan_type ?? j.plan_type), data: codexWindows(j) };
 }
 
@@ -184,14 +187,14 @@ for (const name of await readdir(STATE_DIR)) {
 }
 
 const accounts = new Map(); // id -> public account entry (see /api/usage)
-const pollState = new Map(); // id -> { backoffUntil, backoffReason }
+const pollState = new Map(); // id -> { backoffUntil }
 let proxy = { ok: false, ...(await proxyLocation()), error: "not checked yet", checkedAt: null };
 
 // Last good data per account survives restarts and proxy outages.
 try {
   const c = JSON.parse(await readFile(CACHE_FILE, "utf8"));
   for (const a of Object.values(c.accounts ?? {})) {
-    if (a?.id && a.data) accounts.set(a.id, { ...a, ok: false, stale: true, fetchedAt: null, error: null });
+    if (a?.id && a.data) accounts.set(a.id, { ...a, ok: false, stale: true, fetchedAt: null, error: null, rateLimited: false, retryAt: null });
   }
 } catch { /* none */ }
 
@@ -201,9 +204,11 @@ async function saveCache() {
   await writeAtomic(CACHE_FILE, JSON.stringify({ version: 1, accounts: out }));
 }
 
-function accountId(f) {
-  return `${f.provider}:${String(f.email || f.label || f.name || f.auth_index).toLowerCase()}`;
-}
+// The proxy derives auth_index from the login's file path (sha256 of "<type>:<path>"), so it survives
+// proxy restarts and does not change when another login for the same account comes or goes.
+const accountId = (f) => `${f.provider}:${f.auth_index}`;
+// Two logins for the same account share this key; they are flagged, not merged.
+const sameAccountKey = (f) => `${f.provider}:${String(f.email || f.label || f.name || f.auth_index).toLowerCase()}`;
 
 async function pollAccount(f, entry) {
   const prev = accounts.get(entry.id);
@@ -222,7 +227,8 @@ async function pollAccount(f, entry) {
     return { ...entry, plan: plan || prev?.plan || "", ok: true, stale: false, fetchedAt: now, lastGoodAt: now, error: null, data };
   } catch (e) {
     log(`[${entry.id}] ${e.message ?? e}`);
-    return { ...entry, plan: entry.plan || prev?.plan || "", ok: false, stale: !!prev?.data, fetchedAt: now, lastGoodAt: prev?.lastGoodAt ?? null, error: String(e.message ?? e), data: prev?.data ?? null };
+    const retryAt = e.retryAt ? new Date(e.retryAt).toISOString() : null;
+    return { ...entry, plan: entry.plan || prev?.plan || "", ok: false, stale: !!prev?.data, fetchedAt: now, lastGoodAt: prev?.lastGoodAt ?? null, error: String(e.message ?? e), rateLimited: !!retryAt, retryAt, data: prev?.data ?? null };
   }
 }
 
@@ -235,25 +241,26 @@ async function poll() {
   } catch (e) {
     const error = String(e.message ?? e);
     proxy = { ok: false, ...loc, error, checkedAt };
-    for (const a of accounts.values()) accounts.set(a.id, { ...a, ok: false, stale: true, error });
+    for (const a of accounts.values()) accounts.set(a.id, { ...a, ok: false, stale: true, error, rateLimited: false, retryAt: null });
     log(`proxy: ${error}`);
     return;
   }
   const count = new Map();
-  for (const f of files) count.set(accountId(f), (count.get(accountId(f)) ?? 0) + 1);
+  for (const f of files) count.set(sameAccountKey(f), (count.get(sameAccountKey(f)) ?? 0) + 1);
   const next = await Promise.all(files.map((f) => {
-    const base = accountId(f), duplicate = count.get(base) > 1;
     const entry = {
-      id: duplicate ? `${base}#${f.auth_index}` : base,
+      id: accountId(f),
       kind: f.provider,
       email: f.email || null,
       label: f.label || null,
       plan: f.provider === "codex" ? codexPlan(f.id_token?.plan_type) : (claudePlans.get(f.auth_index) ?? ""),
       disabled: !!f.disabled,
-      duplicate,
+      duplicate: count.get(sameAccountKey(f)) > 1,
       proxyStatus: f.status ?? null,
       proxyMessage: f.status_message || null,
       unavailable: !!f.unavailable,
+      rateLimited: false,
+      retryAt: null,
     };
     return pollAccount(f, entry);
   }));

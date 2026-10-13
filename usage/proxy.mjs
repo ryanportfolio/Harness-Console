@@ -86,11 +86,14 @@ export async function listAuthFiles() {
 }
 
 // One allowlisted upstream GET with the login's token. Returns the upstream status, headers and body.
-export async function upstreamGet(authIndex, provider, name) {
+// `accountId` (Codex only) names the ChatGPT account: a login in a workspace or with several accounts
+// otherwise gets the default account's usage.
+export async function upstreamGet(authIndex, provider, name, accountId = null) {
   const url = UPSTREAM[provider]?.[name];
   if (!url) throw new Error(`no upstream call '${name}' for provider '${provider}'`);
   const conn = await connect();
   const header = { ...(provider === "claude" ? CLAUDE_HEADERS : CODEX_HEADERS), Authorization: "Bearer $TOKEN$" };
+  if (provider === "codex" && accountId) header["chatgpt-account-id"] = String(accountId);
   const j = await management(conn, "api-call", { method: "POST", body: JSON.stringify({ authIndex: String(authIndex), method: "GET", url, header }) });
   if (typeof j?.status_code !== "number") throw new Error(`proxy api-call: no upstream status${typeof j?.error === "string" ? `: ${j.error}` : ""}`);
   // The body is the upstream response as a string of JSON, or already parsed.

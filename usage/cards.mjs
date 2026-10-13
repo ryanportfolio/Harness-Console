@@ -90,6 +90,15 @@ function summaryText(accounts, cards, now) {
   return parts.join(" ") || "No account has live numbers right now.";
 }
 
+// A 429 parks a login until retryAt (set by the server). Nothing fetches it when that time comes: the
+// next page load, Refresh now or sign-in watch does.
+function rateLimitText(retryAt, now) {
+  const t = retryAt ? toMs(retryAt) : NaN;
+  if (!Number.isFinite(t)) return "Rate limited by the usage API.";
+  const until = `Rate limited by the usage API until ${clockText(new Date(t), now)}`;
+  return t > now ? `${until} (in ${span(t - now)}). Press Refresh now after that.` : `${until}. Press Refresh now to fetch it again.`;
+}
+
 // The proxy's own error strings (usage/proxy.mjs), said plainly.
 function proxyProblem(error) {
   const e = String(error ?? "");
@@ -119,9 +128,10 @@ export function viewModel(payload, now = Date.parse(payload.now)) {
     if (a.disabled) notes.unshift("disabled in proxy");
     // Signing in again fixes a rejected or missing login, not a down proxy or a rate limit.
     const broken = !a.disabled && !healthy(a);
+    const rateLimited = !a.ok && !!a.rateLimited;
     // While the proxy is down every card carries the same error; the banner says it once.
-    const error = a.disabled || !proxy.ok ? null : [a.ok ? null : a.error, a.proxyMessage ? `Proxy says: ${a.proxyMessage}` : null, a.unavailable ? "The proxy marks this login unavailable." : null].filter(Boolean).join("\n") || null;
-    const signIn = broken && proxy.ok && proxy.panelUrl && !/^rate limited/.test(a.error ?? "") ? { url: proxy.panelUrl } : null;
+    const error = a.disabled || !proxy.ok ? null : [a.ok ? null : rateLimited ? rateLimitText(a.retryAt, now) : a.error, a.proxyMessage ? `Proxy says: ${a.proxyMessage}` : null, a.unavailable ? "The proxy marks this login unavailable." : null].filter(Boolean).join("\n") || null;
+    const signIn = broken && proxy.ok && proxy.panelUrl && !rateLimited ? { url: proxy.panelUrl } : null;
     return {
       id: a.id,
       kind: a.kind,
@@ -129,6 +139,8 @@ export function viewModel(payload, now = Date.parse(payload.now)) {
       plan: a.plan || "",
       ok: !!a.ok,
       stale,
+      // Greyed: old numbers, a disabled login, or no numbers while the proxy is down.
+      dim: stale || !!a.disabled || (!proxy.ok && !d),
       staleLabel,
       meta: stale ? staleLabel : a.ok && a.fetchedAt ? `fetched ${ago(a.fetchedAt, now)}` : "",
       disabled: !!a.disabled,
@@ -142,7 +154,7 @@ export function viewModel(payload, now = Date.parse(payload.now)) {
       notes,
       cells: columns.map((col) => cellView(col, (d?.windows ?? []).find((w) => w.label === col), now, stale)),
       // A login the proxy flags still has live numbers, but signing in is what it needs.
-      statusText: a.disabled ? "Disabled in proxy" : stale ? `As of ${when ? ago(when, now) : "an unknown time"}` : broken ? "Sign-in needed" : "Live",
+      statusText: a.disabled ? "Disabled in proxy" : stale ? `As of ${when ? ago(when, now) : "an unknown time"}` : !proxy.ok ? "Proxy unreachable" : rateLimited ? "Rate limited" : broken ? "Sign-in needed" : "Live",
     };
   });
   // Before the first proxy check nothing is known yet, so neither the ledger nor the header may read as a real empty state.

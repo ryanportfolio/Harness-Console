@@ -53,7 +53,46 @@ test('cards: a proxy message or unavailable flag offers sign-in and shows the me
   assert.match(c.error, /token expired/);
   assert.deepEqual(view([acct({ unavailable: true })]).cards[0].signIn, { url: proxy.panelUrl });
   // a rate limit is not fixed by signing in
-  assert.equal(view([acct({ ok: false, error: 'rate limited by usage API; retrying in 300s' })]).cards[0].signIn, null);
+  assert.equal(view([acct({ ok: false, rateLimited: true, retryAt: iso(5 * 60_000), error: 'rate limited by usage API' })]).cards[0].signIn, null);
+});
+
+test('cards: a rate-limited login with no numbers reads "Rate limited", offers no sign-in, and its retry text follows the clock', () => {
+  const a = acct({ ok: false, data: null, lastGoodAt: null, rateLimited: true, retryAt: iso(10 * 60_000), error: 'rate limited by usage API' });
+  const early = viewModel({ now: iso(0), proxy, accounts: [a] }, now).cards[0];
+  const later = viewModel({ now: iso(0), proxy, accounts: [a] }, now + 7 * 60_000).cards[0];
+  for (const c of [early, later]) {
+    assert.equal(c.statusText, 'Rate limited');
+    assert.equal(c.signIn, null);
+    assert.doesNotMatch(c.error, /retrying|automatic/i);
+  }
+  assert.match(early.error, /in 10m/);
+  assert.match(later.error, /in 3m/);
+  assert.notEqual(early.error, later.error);
+  // once retryAt passes, the text says to refresh, not that it will retry
+  const past = viewModel({ now: iso(0), proxy, accounts: [a] }, now + 11 * 60_000).cards[0];
+  assert.match(past.error, /Press Refresh now/);
+  // an error that merely starts like a rate limit is not one without the flag
+  assert.deepEqual(view([acct({ ok: false, data: null, error: 'rate limited by usage API' })]).cards[0].signIn, { url: proxy.panelUrl });
+  // a rate-limited row with numbers keeps "As of"
+  assert.match(view([acct({ ok: false, stale: true, rateLimited: true, retryAt: iso(60_000) })]).cards[0].statusText, /^As of /);
+});
+
+test('cards: proxy down, a login with no numbers reads "Proxy unreachable", greyed, no sign-in; one with numbers stays "As of"', () => {
+  const down = { ...proxy, ok: false, error: 'proxy not reachable at http://127.0.0.1:8317 (ECONNREFUSED)' };
+  const vm = view([
+    acct({ id: 'claude:none', ok: false, stale: true, data: null, lastGoodAt: null, error: down.error }),
+    acct({ id: 'claude:some', ok: false, stale: true, error: down.error }),
+  ], down);
+  const [none, some] = vm.cards;
+  assert.equal(none.statusText, 'Proxy unreachable');
+  assert.equal(none.dim, true);
+  assert.equal(none.signIn, null);
+  assert.equal(some.statusText, 'As of 1m ago');
+  assert.equal(some.dim, true);
+  assert.equal(some.signIn, null);
+  // proxy up: a live row is not greyed, a disabled one is
+  assert.equal(view([acct({})]).cards[0].dim, false);
+  assert.equal(view([acct({ disabled: true, ok: false })]).cards[0].dim, true);
 });
 
 test('cards: disabled login is greyed "disabled in proxy" with no sign-in', () => {

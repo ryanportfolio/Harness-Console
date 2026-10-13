@@ -8,6 +8,7 @@ import { mkdtemp, mkdir, writeFile, readdir, readFile, rm } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { TokenScanner, transcriptDirs } from '../usage/tokens.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ALLOWED = new Set(['https://api.anthropic.com/api/oauth/usage', 'https://api.anthropic.com/api/oauth/profile', 'https://chatgpt.com/backend-api/wham/usage']);
@@ -33,9 +34,10 @@ function startStub(key, fx, calls, port = 0) {
         // fx.delayMs slows every upstream answer, as a real usage API does.
         const send = (code, obj) => (fx.delayMs ? setTimeout(() => reply(code, obj), fx.delayMs) : reply(code, obj));
         const j = JSON.parse(body);
-        calls.push({ url: j.url, authIndex: j.authIndex, auth: j.header?.Authorization });
+        const accountKey = Object.keys(j.header ?? {}).find(k => k.toLowerCase() === 'chatgpt-account-id');
+        calls.push({ url: j.url, authIndex: j.authIndex, auth: j.header?.Authorization, accountHeader: accountKey ? j.header[accountKey] : undefined });
         const fail = fx.fail[j.authIndex];
-        if (fail) return send(200, { status_code: fail, header: {}, body: '{"error":"upstream down"}' });
+        if (fail) return send(200, { status_code: fail, header: fx.failHeader?.[j.authIndex] ?? {}, body: '{"error":"upstream down"}' });
         if (j.url.endsWith('/oauth/profile')) return send(200, { status_code: 200, header: {}, body: JSON.stringify(profile) });
         if (j.url.endsWith('/oauth/usage')) return send(200, { status_code: 200, header: {}, body: JSON.stringify(claudeUsage) });
         if (j.url.endsWith('/wham/usage')) return send(200, { status_code: 200, header: {}, body: codexUsage }); // already-parsed body
@@ -89,7 +91,7 @@ test('tracker reads accounts from a stubbed CLIProxyAPI, keeps stale data, never
     files: [
       { provider: 'claude', email: 'Alice@Example.com', label: 'alice', name: 'a.json', auth_index: 'ca', disabled: false, status: 'active', status_message: '', unavailable: false },
       { provider: 'claude', email: 'zed@example.com', label: 'zed', name: 'z.json', auth_index: 'cz', disabled: true, status: 'disabled', status_message: 'off', unavailable: false },
-      { provider: 'codex', email: 'bob@example.com', label: 'bob', name: 'b.json', auth_index: 'xb', disabled: false, status: 'active', status_message: '', unavailable: false, id_token: { plan_type: 'pro' } },
+      { provider: 'codex', email: 'bob@example.com', label: 'bob', name: 'b.json', auth_index: 'xb', disabled: false, status: 'active', status_message: '', unavailable: false, id_token: { plan_type: 'pro', chatgpt_account_id: 'acct-bob-1' } },
       { provider: 'codex', email: 'dup@example.com', name: 'd1.json', auth_index: 'd1', disabled: false, status: 'active' },
       { provider: 'codex', email: 'DUP@example.com', name: 'd2.json', auth_index: 'd2', disabled: false, status: 'active' },
       { provider: 'gemini', email: 'g@example.com', name: 'g.json', auth_index: 'g1', disabled: false, status: 'active' },
@@ -127,26 +129,26 @@ test('tracker reads accounts from a stubbed CLIProxyAPI, keeps stale data, never
   assert.equal(u.proxy.url, `http://127.0.0.1:${stubPort}`);
   assert.equal(u.proxy.panelUrl, `http://127.0.0.1:${stubPort}/management.html#/oauth`);
   assert.equal(u.proxy.error, null);
-  assert.deepEqual(u.accounts.map(a => a.id), ['claude:alice@example.com', 'claude:zed@example.com', 'codex:bob@example.com', 'codex:dup@example.com#d1', 'codex:dup@example.com#d2']);
-  const alice = byId(u, 'claude:alice@example.com');
+  assert.deepEqual(u.accounts.map(a => a.id), ['claude:ca', 'claude:cz', 'codex:xb', 'codex:d1', 'codex:d2']);
+  const alice = byId(u, 'claude:ca');
   assert.equal(alice.ok, true);
   assert.equal(alice.stale, false);
   assert.equal(alice.email, 'Alice@Example.com');
   assert.equal(alice.label, 'alice');
   assert.equal(alice.plan, 'Claude Max 20x');
   assert.deepEqual(alice.data.windows.map(w => [w.label, w.usedPercent]), [['Session (5h)', 12], ['Weekly', 40]]);
-  const bob = byId(u, 'codex:bob@example.com');
+  const bob = byId(u, 'codex:xb');
   assert.equal(bob.ok, true);
   assert.equal(bob.plan, 'ChatGPT Pro');
   assert.equal(bob.data.windows[0].usedPercent, 52);
   // The live body's balance is a decimal string with no currency field: a count, not dollars.
   assert.deepEqual(bob.data.notes, ['Credits: 62,500', '2 banked resets']);
-  assert.equal(byId(u, 'codex:dup@example.com#d1').duplicate, true);
-  assert.equal(byId(u, 'codex:dup@example.com#d2').duplicate, true);
+  assert.equal(byId(u, 'codex:d1').duplicate, true);
+  assert.equal(byId(u, 'codex:d2').duplicate, true);
   assert.equal(bob.duplicate, false);
 
   // 2. A disabled login is listed but never sent to api-call.
-  const zed = byId(u, 'claude:zed@example.com');
+  const zed = byId(u, 'claude:cz');
   assert.equal(zed.disabled, true);
   assert.equal(zed.ok, false);
   assert.equal(zed.error, null);
@@ -154,6 +156,14 @@ test('tracker reads accounts from a stubbed CLIProxyAPI, keeps stale data, never
   assert.equal(zed.proxyMessage, 'off');
   assert(calls.every(c => c.authIndex !== 'cz' && c.authIndex !== 'g1'), 'disabled and non-claude/codex logins never reach api-call');
   assert(calls.every(c => c.auth === 'Bearer $TOKEN$'), 'the proxy supplies the token');
+  // Codex usage calls name the login's ChatGPT account when the proxy knows it; Claude calls never do.
+  const codexUsageCalls = idx => calls.filter(c => c.authIndex === idx && c.url.endsWith('/wham/usage'));
+  assert(codexUsageCalls('xb').length > 0);
+  for (const c of codexUsageCalls('xb')) assert.equal(c.accountHeader, 'acct-bob-1');
+  assert(codexUsageCalls('d1').length > 0);
+  for (const c of [...codexUsageCalls('d1'), ...codexUsageCalls('d2')]) assert.equal(c.accountHeader, undefined, 'no account id, no header');
+  assert(calls.some(c => c.url.includes('anthropic.com')));
+  for (const c of calls.filter(c => c.url.includes('anthropic.com'))) assert.equal(c.accountHeader, undefined, 'Claude calls carry no chatgpt-account-id');
 
   // Legacy snapshot files gone, pricing kept; ~/.claude-2 transcripts counted.
   const left = await readdir(stateDir);
@@ -170,7 +180,7 @@ test('tracker reads accounts from a stubbed CLIProxyAPI, keeps stale data, never
   fx.files[0].status_message = 'token expired';
   await refresh();
   u = await usage();
-  const aliceStale = byId(u, 'claude:alice@example.com');
+  const aliceStale = byId(u, 'claude:ca');
   assert.equal(aliceStale.ok, false);
   assert.equal(aliceStale.stale, true);
   assert.equal(aliceStale.lastGoodAt, alice.lastGoodAt);
@@ -184,10 +194,10 @@ test('tracker reads accounts from a stubbed CLIProxyAPI, keeps stale data, never
   fx.files = fx.files.filter(f => f.auth_index !== 'xb');
   await refresh();
   u = await usage();
-  assert.equal(byId(u, 'codex:bob@example.com'), undefined);
-  assert.equal(byId(u, 'claude:alice@example.com').ok, true);
+  assert.equal(byId(u, 'codex:xb'), undefined);
+  assert.equal(byId(u, 'claude:ca').ok, true);
   const cache = await readFile(path.join(stateDir, 'usage-cache.json'), 'utf8');
-  assert(!cache.includes('bob@example.com') && cache.includes('alice@example.com'));
+  assert(!cache.includes('bob@example.com') && cache.includes('Alice@Example.com'));
 
   // 5. Proxy down: proxy.ok false, cached accounts kept and marked stale with the error.
   await stopStub(stub);
@@ -197,7 +207,7 @@ test('tracker reads accounts from a stubbed CLIProxyAPI, keeps stale data, never
   assert.match(u.proxy.error, /not reachable/);
   assert.equal(u.accounts.length, 4);
   for (const a of u.accounts) { assert.equal(a.ok, false); assert.equal(a.stale, true); assert.equal(a.error, u.proxy.error); }
-  assert.equal(byId(u, 'claude:alice@example.com').data.windows.length, 2);
+  assert.equal(byId(u, 'claude:ca').data.windows.length, 2);
 
   // 6. Restart with the proxy still down: the cache file brings the accounts back.
   child.kill();
@@ -205,8 +215,8 @@ test('tracker reads accounts from a stubbed CLIProxyAPI, keeps stale data, never
   child = startTracker(env, output);
   u = await waitFor(async () => { const j = await usage(); return j.proxy.checkedAt && j; }, 'restart poll');
   assert.equal(u.proxy.ok, false);
-  assert.equal(byId(u, 'claude:alice@example.com').data.windows.length, 2);
-  assert.equal(byId(u, 'claude:alice@example.com').stale, true);
+  assert.equal(byId(u, 'claude:ca').data.windows.length, 2);
+  assert.equal(byId(u, 'claude:ca').stale, true);
 
   // 7. Wrong key: the proxy answers 401 and the error says so without echoing the key.
   stub = await startStub('other-key', fx, calls, stubPort);
@@ -255,16 +265,16 @@ test('two quick refreshes do not re-fetch a healthy login but do fetch a newly a
   await refresh();
   const u = await usage();
   assert.equal(usageCalls('ca'), 1, 'healthy login fetched under a minute ago is not fetched again');
-  assert.equal(u.accounts.find(a => a.id === 'claude:a@example.com').fetchedAt, first.accounts[0].fetchedAt);
+  assert.equal(u.accounts.find(a => a.id === 'claude:ca').fetchedAt, first.accounts[0].fetchedAt);
   assert.equal(usageCalls('xb'), 1, 'new login fetched once, then left alone');
-  const b = u.accounts.find(a => a.id === 'codex:b@example.com');
+  const b = u.accounts.find(a => a.id === 'codex:xb');
   assert.equal(b.ok, true);
   assert.equal(b.plan, 'ChatGPT Pro Max');
   // A login the proxy flags is fetched again on the next refresh.
   fx.files[0].status_message = 'token expired';
   await refresh();
   assert.equal(usageCalls('ca'), 2);
-  assert.equal((await usage()).accounts.find(a => a.id === 'claude:a@example.com').proxyMessage, 'token expired');
+  assert.equal((await usage()).accounts.find(a => a.id === 'claude:ca').proxyMessage, 'token expired');
 });
 
 test('a slow usage API never shows a checked proxy with an unfilled account list', async t => {
@@ -323,7 +333,7 @@ test('a slow usage API never shows a checked proxy with an unfilled account list
     assert.equal(j.proxy.checkedAt, done.proxy.checkedAt, 'check time moves only with the new account list');
   }
   assert(after.proxy.checkedAt > done.proxy.checkedAt);
-  assert(after.accounts.find(a => a.id === 'claude:c@example.com').fetchedAt);
+  assert(after.accounts.find(a => a.id === 'claude:cc').fetchedAt);
 });
 
 test('refresh answers while a token scan is still running, and /api/tokens says it is scanning', async t => {
@@ -368,4 +378,111 @@ test('refresh answers while a token scan is still running, and /api/tokens says 
   const done = await waitFor(async () => { const j = await tokens(); return !j.scanning && j; }, 'scan end', 45000);
   assert.equal(done.providers[0].files, FILES);
   assert.equal(done.providers[0].total, FILES * 2);
+});
+
+test('a login keeps its id, numbers and lastGoodAt when its same-email twin goes; a 429 stores retryAt, not a frozen countdown', async t => {
+  const tmp = await mkdtemp(path.join(tmpdir(), 'usage-twin-test-'));
+  const key = randomBytes(24).toString('hex');
+  const proxyDir = path.join(tmp, 'proxy'), stateDir = path.join(tmp, 'state'), home = path.join(tmp, 'home');
+  for (const d of [proxyDir, stateDir, home, path.join(tmp, 'claude'), path.join(tmp, 'codex')]) await mkdir(d, { recursive: true });
+  await writeFile(path.join(stateDir, 'pricing.json'), JSON.stringify({ fetchedAt: Date.now(), rates: {} }));
+  const fx = {
+    files: [
+      { provider: 'claude', email: 'twin@example.com', name: 't1.json', auth_index: 't1', disabled: false, status: 'active', status_message: '', unavailable: false },
+      { provider: 'claude', email: 'Twin@example.com', name: 't2.json', auth_index: 't2', disabled: false, status: 'active', status_message: '', unavailable: false },
+      { provider: 'codex', email: 'busy@example.com', name: 'r.json', auth_index: 'r1', disabled: false, status: 'active', status_message: '', unavailable: false },
+    ],
+    fail: { r1: 429 },
+    failHeader: { r1: { 'Retry-After': ['120'] } },
+  };
+  const calls = [];
+  const stub = await startStub(key, fx, calls);
+  await writeFile(path.join(proxyDir, 'config.yaml'), `port: ${stub.address().port}\n`);
+  await writeFile(path.join(proxyDir, 'dashboard-key.txt'), key);
+  const port = await freePort();
+  const base = `http://127.0.0.1:${port}`;
+  const child = startTracker({ USAGE_PORT: String(port), USAGE_PROXY_DIR: proxyDir, USAGE_STATE_DIR: stateDir, CLAUDE_CONFIG_DIR: path.join(tmp, 'claude'), CODEX_HOME: path.join(tmp, 'codex'), USERPROFILE: home, HOME: home }, { text: '' });
+  t.after(async () => {
+    child.kill();
+    await stopStub(stub);
+    await new Promise(r => setTimeout(r, 300));
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
+  });
+  const usage = async () => (await fetch(`${base}/api/usage`)).json();
+  const refresh = async () => assert.equal((await fetch(`${base}/api/refresh`, { method: 'POST', headers: { origin: base, 'x-usage-request': '1' } })).status, 204);
+  const byId = (u, id) => u.accounts.find(a => a.id === id);
+
+  const before = Date.now();
+  const first = await waitFor(async () => { const j = await usage(); return j.accounts.length === 3 && j.accounts.every(a => a.fetchedAt) && j; }, 'first poll');
+  // Found by auth_index, not by id format, so the old email-based ids fail on the id change itself.
+  const survivor = first.accounts.find(a => a.kind === 'claude' && a.id.endsWith('t1'));
+  const twin = first.accounts.find(a => a.kind === 'claude' && a.id.endsWith('t2'));
+  assert.equal(survivor.ok, true);
+  assert.equal(survivor.duplicate, true);
+  assert.equal(twin.duplicate, true);
+  assert(survivor.lastGoodAt);
+
+  // The 429: a flag and a timestamp from Retry-After; the error text holds no seconds count.
+  const busy = first.accounts.find(a => a.kind === 'codex');
+  assert.equal(busy.ok, false);
+  assert.equal(busy.rateLimited, true);
+  const retryAt = Date.parse(busy.retryAt);
+  assert(retryAt >= before + 119_000 && retryAt <= Date.now() + 121_000, busy.retryAt);
+  assert.doesNotMatch(busy.error, /\d+\s*s\b|retrying in/);
+  assert.equal(survivor.rateLimited, false);
+
+  // The twin goes and the survivor's fetch fails. The proxy flags it so the under-a-minute skip does not apply.
+  fx.files = fx.files.filter(f => f.auth_index !== 't2');
+  fx.files[0].status_message = 'token expired';
+  fx.fail.t1 = 500;
+  await refresh();
+  const u = await usage();
+  const after = byId(u, survivor.id);
+  assert(after, `survivor id changed: ${u.accounts.map(a => a.id).join(',')}`);
+  assert.equal(after.ok, false);
+  assert.equal(after.stale, true);
+  assert.equal(after.duplicate, false);
+  assert.equal(after.lastGoodAt, survivor.lastGoodAt);
+  assert.deepEqual(after.data, survivor.data);
+  const cache = JSON.parse(await readFile(path.join(stateDir, 'usage-cache.json'), 'utf8'));
+  assert.deepEqual(Object.keys(cache.accounts), [survivor.id]);
+  assert.equal(cache.accounts[survivor.id].lastGoodAt, survivor.lastGoodAt);
+  assert.deepEqual(cache.accounts[survivor.id].data, survivor.data);
+
+  // Still parked: the same retryAt, and no second call to the usage API.
+  assert.equal(byId(u, busy.id).retryAt, busy.retryAt);
+  assert.equal(calls.filter(c => c.authIndex === 'r1').length, 1);
+});
+
+test('transcript dirs: the CLI default dirs are scanned even before they exist, and counted once they appear', async t => {
+  const tmp = await mkdtemp(path.join(tmpdir(), 'usage-dirs-test-'));
+  t.after(() => rm(tmp, { recursive: true, force: true }).catch(() => {}));
+  const home = path.join(tmp, 'home');
+  await mkdir(path.join(home, '.claude-3'), { recursive: true });
+  // Neither ~/.claude nor ~/.codex exists; a numbered dir that does is kept, one that does not is never listed.
+  assert.deepEqual(await transcriptDirs({ USERPROFILE: home }), [
+    { kind: 'claude', dir: path.join(home, '.claude') },
+    { kind: 'claude', dir: path.join(home, '.claude-3') },
+    { kind: 'codex', dir: path.join(home, '.codex') },
+  ]);
+  const claudeEnv = path.join(tmp, 'later-claude'), codexEnv = path.join(tmp, 'later-codex');
+  assert.deepEqual(await transcriptDirs({ USERPROFILE: home, CLAUDE_CONFIG_DIR: claudeEnv, CODEX_HOME: codexEnv }), [
+    { kind: 'claude', dir: claudeEnv },
+    { kind: 'claude', dir: path.join(home, '.claude-3') },
+    { kind: 'codex', dir: codexEnv },
+  ]);
+
+  const logs = [];
+  const writeAtomic = (file, text) => writeFile(file, text);
+  const s = new TokenScanner({ name: 'claude later', kind: 'claude', dir: claudeEnv }, path.join(tmp, 'cache.json'), writeAtomic, m => logs.push(m));
+  await s.load();
+  await s.scan();
+  assert.equal(s.summary(7, null).files, 0);
+  assert.equal(s.summary(7, null).total, 0);
+  await mkdir(path.join(claudeEnv, 'projects', 'p'), { recursive: true });
+  await writeFile(path.join(claudeEnv, 'projects', 'p', 's.jsonl'), JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), requestId: 'r1', message: { id: 'm1', model: 'claude-x', usage: { input_tokens: 7, output_tokens: 3 } } }) + '\n');
+  await s.scan();
+  assert.equal(s.summary(7, null).files, 1);
+  assert.equal(s.summary(7, null).total, 10);
+  assert.deepEqual(logs.filter(m => /error|ENOENT/i.test(m)), []);
 });

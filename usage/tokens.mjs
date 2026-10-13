@@ -94,7 +94,9 @@ const LAYOUT = {
 };
 
 // Transcript dirs to scan: the CLI's own config dir (CLAUDE_CONFIG_DIR / CODEX_HOME, else ~/.claude /
-// ~/.codex) plus every ~/.claude-<n> or ~/.codex-<n> left from per-account config dirs.
+// ~/.codex) plus every ~/.claude-<n> or ~/.codex-<n> left from per-account config dirs. The CLI's own
+// dir is kept even before it exists: scanning a missing dir finds nothing, and the first scan after the
+// CLI creates it counts it.
 export async function transcriptDirs(env = process.env) {
   const home = env.USERPROFILE ?? env.HOME ?? "";
   let names = [];
@@ -107,7 +109,7 @@ export async function transcriptDirs(env = process.env) {
     for (const dir of dirs) {
       if (seen.has(dir.toLowerCase())) continue;
       seen.add(dir.toLowerCase());
-      if ((await stat(dir).catch(() => null))?.isDirectory()) out.push({ kind, dir });
+      if (dir === dirs[0] || (await stat(dir).catch(() => null))?.isDirectory()) out.push({ kind, dir });
     }
   }
   return out;
