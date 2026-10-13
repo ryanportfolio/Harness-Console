@@ -15,7 +15,7 @@ const asset = (n) => fs.readFileSync(path.join(ROOT, "assets", "readme", n), "ut
 
 // Numbers each panel must carry, in every variant.
 const NEED = {
-  masthead: ["on load", "no poll timer", "CLIProxyAPI", `${F.refetchHealthySeconds} s`, `${F.watchIntervalSeconds} s`, `${F.tokenScanSeconds} s`, `${F.warnAt}%`, `${F.badAt}%`, `fill="${F.barColors.ok}"`, `fill="${F.barColors.warn}"`, `fill="${F.barColors.bad}"`, "neither flagged nor marked unavailable", `:${F.port}`, `:${F.appPort}`, "Harness Console", ...F.claudeWindows],
+  masthead: ["on load", "no poll timer", "CLIProxyAPI", `${F.refetchHealthySeconds} s`, `${F.watchIntervalSeconds} s`, `${F.tokenScanSeconds} s`, `${F.warnAt}%`, `${F.badAt}%`, `fill="${F.barColors.ok}"`, `fill="${F.barColors.warn}"`, `fill="${F.barColors.bad}"`, "no auth failure reported", `:${F.port}`, `:${F.appPort}`, "Harness Console", ...F.claudeWindows],
 };
 for (const [name, needs] of Object.entries(NEED)) {
   for (const v of ["light", "dark", "narrow-light", "narrow-dark"]) {

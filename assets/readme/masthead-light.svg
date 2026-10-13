@@ -102,5 +102,5 @@
 <text x="506.84" y="834" class="mut" font-size="12">90% and over</text>
 <text x="40" y="862" class="mut" font-size="12">Clocks drain at 1 s per hour of window: a 5 h window empties every 5 s, 7 days every 168 s, 90 days every 2160 s.</text>
 <text x="40" y="886" class="mut" font-size="12">on load: no poll timer. Each login is fetched through CLIProxyAPI at startup, on every page load and on Refresh</text>
-<text x="40" y="904" class="mut" font-size="12">now; one fetched fine under 60 s ago, and neither flagged nor marked unavailable by the proxy, keeps its numbers.</text>
+<text x="40" y="904" class="mut" font-size="12">now; one fetched fine under 60 s ago, with no auth failure reported by the proxy, keeps its numbers.</text>
 </svg>

@@ -12,7 +12,8 @@
      Claude in bronze, Codex in ink; segments keep their alpha steps. Usage
      bars darken as they fill (hayfield, bronze, ink). */
   :root {
-    --bg: #f4e6cd; --card: #f4e6cd; --linen: #edddc3; --fg: #1e211e; --body: #1e211e; --muted: #8f774b; --line: #1e211e;
+    /* --muted is text: a darker shade of the bronze (#8f774b, 3.47:1 on --bg) that reaches 4.97:1. */
+    --bg: #f4e6cd; --card: #f4e6cd; --linen: #edddc3; --fg: #1e211e; --body: #1e211e; --muted: #735f3b; --line: #1e211e;
     --ok: #ba9d6a; --warn: #8f774b; --bad: #1e211e; --track: #edddc3;
     --claude: #8f774b; --codex: #1e211e; --accent: #1e211e;
     --sans: Verdana, Geneva, "DejaVu Sans", sans-serif;
@@ -68,16 +69,19 @@
   .bar > i { display: block; height: 100%; border-radius: 0; background: var(--ok); transition: width .4s; }
   .bar.warn > i { background: var(--warn); } .bar.bad > i { background: var(--bad); }
   .reset { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  /* Stale (failed fetch, proxy down) and disabled rows keep their last numbers, faded, with dashed bars; a row with no numbers while the proxy is down fades too. */
-  tr.dim td.acct, tr.dim td.cell { opacity: .5; }
-  tr.dim .bar { background: repeating-linear-gradient(90deg, var(--track) 0 6px, transparent 6px 9px); }
+  /* Stale (failed fetch, proxy down) and disabled rows keep their last numbers with dashed, faded bars and
+     the name and percentages in --muted; a row with no numbers while the proxy is down does the same.
+     Text keeps full opacity: --muted on --bg is 4.97:1, the 4.5:1 floor for text. */
+  tr.dim td.acct .name, tr.dim td.cell .pct { color: var(--muted); }
+  tr.dim .bar { opacity: .5; background: repeating-linear-gradient(90deg, var(--track) 0 6px, transparent 6px 9px); }
   tr.dim .bar > i { -webkit-mask: repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 9px); mask: repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 9px); }
   .state { font-size: 18px; color: var(--muted); }
   .state.live { color: var(--fg); }
   .status > * + * { margin-top: 4px; }
   .notes, .warnings, .error, .signin { font-size: 14px; }
   button.login { font-size: 16px; font-weight: 700; text-transform: none; letter-spacing: 0; }
-  .notes { color: var(--muted); } .warnings { color: var(--warn); } .error { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
+  /* Warnings are text, so --muted (4.97:1), not the --warn bar colour (3.47:1). */
+  .notes { color: var(--muted); } .warnings { color: var(--muted); } .error { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
   .signin { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
   .empty { color: var(--muted); }
   @media (max-width: 900px) {

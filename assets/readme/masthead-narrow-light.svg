@@ -97,6 +97,6 @@
 <text x="24" y="924" class="mut" font-size="11">on load: no poll timer. Each login is fetched</text>
 <text x="24" y="940.5" class="mut" font-size="11">through CLIProxyAPI at startup, on every page load</text>
 <text x="24" y="957" class="mut" font-size="11">and on Refresh now; one fetched fine under 60 s</text>
-<text x="24" y="973.5" class="mut" font-size="11">ago, and neither flagged nor marked unavailable by</text>
-<text x="24" y="990" class="mut" font-size="11">the proxy, keeps its numbers.</text>
+<text x="24" y="973.5" class="mut" font-size="11">ago, with no auth failure reported by the proxy,</text>
+<text x="24" y="990" class="mut" font-size="11">keeps its numbers.</text>
 </svg>

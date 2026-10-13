@@ -70,12 +70,33 @@ export function collectFacts() {
     return [k, name];
   }));
   // Status order the README states: disabled, stale ("As of"), proxy unreachable, rate limited, sign-in needed, live.
-  must(cards, /statusText: a\.disabled \? "Disabled in proxy" : stale \? `As of [^`]*` : !proxy\.ok \? "Proxy unreachable" : rateLimited \? "Rate limited" : broken \? "Sign-in needed" : "Live"/, "usage/cards.mjs status order changed");
+  must(cards, /statusText: a\.disabled \? "Disabled in proxy" : stale \? `As of [^`]*` : !proxy\.ok \? "Proxy unreachable" : rateLimited \? "Rate limited" : broken \? "Sign-in needed" : !a\.ok \? "Fetch failed" : "Live"/, "usage/cards.mjs status order changed");
+  // Sign-in is for a rejected credential only: a usage API 401 or 403, a token the proxy cannot produce,
+  // or the proxy's auth-failure markers. Cooldown and upstream-error flags are not.
+  must(cards, /const broken = !a\.disabled && signInNeeded\(a\);/, "usage/cards.mjs offers sign-in on different conditions now");
+  must(cards, /const AUTH_MARKER = \/\^\(unauthorized\|payment_required\|invalid\[_ \]grant\|token expired\)\\b\/i;/, "usage/cards.mjs auth-failure markers changed");
+  must(cards, /const COOLDOWN_MARKER = \/\^\(quota exhausted\|quota\|transient upstream error\|/, "usage/cards.mjs cooldown markers changed");
+  // The README lists every rule of signInNeeded, in this order, with these word lists.
+  must(cards, /const AUTH_REASONS = \["unauthorized", "payment_required", "invalid_grant"\];/, "usage/cards.mjs auth-failure cooldown reasons changed");
+  must(cards, /const AUTH_TEXT = \/\\b40\[13\]\\b\|unauthori\[sz\]ed\|authenticat\|permission\|forbidden\|invalid\[_ \]grant\|revoked\|expired\/i;/, "usage/cards.mjs auth words in a raw proxy message changed");
+  must(cards, /export function signInNeeded\(a\) \{\s*if \(!a\) return false;\s*if \(a\.authRejected\) return true;\s*const msg = String\(a\.proxyMessage \?\? ""\)\.trim\(\);\s*const cooldowns = a\.proxyCooldowns \?\? \[\];\s*if \(AUTH_MARKER\.test\(msg\) \|\| cooldowns\.some\(\(c\) => AUTH_REASONS\.includes\(c\.reason\) \|\| c\.httpStatus === 401 \|\| c\.httpStatus === 403\)\) return true;\s*if \(cooldowns\.length \|\| COOLDOWN_MARKER\.test\(msg\)\) return false;\s*if \(msg\) return AUTH_TEXT\.test\(msg\);\s*\/\/[^\n]*\n\s*return !!a\.unavailable && !a\.proxyRetryAt;\s*\}/, "usage/cards.mjs signInNeeded rules changed");
+  must(cards, /export const healthy = \(a\) => !!a\?\.ok && !signInNeeded\(a\);/, "usage/cards.mjs sign-in watch success test changed");
+  must(server, /if \(r\.status === 401 \|\| r\.status === 403\) throw Object\.assign\([^\n]*\{ authRejected: true \}\);/, "usage/server.mjs no longer reads a usage API 401 or 403 as a rejected credential");
+  must(server, /if \(\/api-call HTTP 400: auth token\/\.test\(e\.message\)\) e\.authRejected = true;/, "usage/server.mjs no longer reads a missing proxy token as a rejected credential");
+  // "Proxy unreachable" covers every failure to list the logins.
+  must(server, /files = \(await listAuthFiles\(\)\)\.filter\(\(f\) => FETCH\[f\.provider\]\);\s*\} catch \(e\) \{\s*const error = String\(e\.message \?\? e\);\s*proxy = \{ ok: false,/, "usage/server.mjs no longer marks the proxy down on any listing failure");
+  must(proxySrc, /if \(!Array\.isArray\(j\?\.files\)\) throw new Error/, "usage/proxy.mjs no longer rejects a malformed login list");
+  must(proxySrc, /if \(!key\) throw new Error/, "usage/proxy.mjs no longer fails without a management key");
+  // Codex calls name the login's ChatGPT account.
+  must(proxySrc, /if \(provider === "codex" && accountId\) header\["chatgpt-account-id"\] = String\(accountId\);/, "usage/proxy.mjs no longer sends chatgpt-account-id on Codex calls");
+  must(server, /usageBody\(file, state, file\.id_token\?\.chatgpt_account_id\)/, "usage/server.mjs no longer takes the Codex account id from id_token");
   must(cards, /const rateLimited = !a\.ok && !!a\.rateLimited;/, "usage/cards.mjs no longer reads the server's rate-limit flag");
   must(cards, /panelUrl && !rateLimited \?/, "usage/cards.mjs offers sign-in to a rate-limited login now");
   must(cards, /dim: stale \|\| !!a\.disabled \|\| \(!proxy\.ok && !d\)/, "usage/cards.mjs greys different rows now");
   // The refetch skip conditions the README lists.
-  must(server, /if \(prev\?\.ok && !entry\.proxyMessage && !entry\.unavailable && prev\.fetchedAt && Date\.now\(\) - Date\.parse\(prev\.fetchedAt\) < REFETCH_HEALTHY_MS\)/, "usage/server.mjs skips a refetch on different conditions now");
+  must(server, /if \(prev\?\.ok && !signInNeeded\(entry\) && prev\.fetchedAt && Date\.now\(\) - Date\.parse\(prev\.fetchedAt\) < REFETCH_HEALTHY_MS\)/, "usage/server.mjs skips a refetch on different conditions now");
+  // Token caches of a transcript folder that is gone still count.
+  must(server, /const owner = await cacheOwner\(file\);[^\n]*\n[^\n]*\n\s*addScanner\(owner\.kind, owner\.dir, file\);/, "usage/server.mjs no longer counts saved token records of a deleted folder");
   // Retry claims: a failed profile fetch is not cached; a failed price fetch leaves fetchedAt alone.
   must(server, /catch \{ return ""; \}[^\n]*\n\s*if \(!r\.ok \|\| !r\.json\) return "";[\s\S]{0,400}claudePlans\.set\(/, "usage/server.mjs caches a failed Claude profile fetch now");
   must(pricing, /if \(!force && Date\.now\(\) - this\.fetchedAt < TTL_MS\) return;/, "usage/pricing.mjs TTL check changed");

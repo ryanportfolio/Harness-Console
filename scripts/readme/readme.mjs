@@ -141,7 +141,7 @@ The tracker reads the proxy's login list, the usage of each login through the pr
 
 On its first start after an upgrade it moves state an older version left in the repository root's \`.state/\` into \`usage/.state/\`, and deletes the per-account snapshot files older versions wrote there.
 
-It never reads or writes a CLI credential file and never refreshes a token; CLIProxyAPI owns the logins and their refresh. Each vendor call goes out as \`POST /v0/management/api-call\`, naming the login and one of three fixed upstream URLs, with the header \`Authorization: Bearer ${P.tokenPlaceholder}\`. The proxy puts that login's token in place of \`${P.tokenPlaceholder}\` and makes the call.
+It never reads or writes a CLI credential file and never refreshes a token; CLIProxyAPI owns the logins and their refresh. Each vendor call goes out as \`POST /v0/management/api-call\`, naming the login and one of three fixed upstream URLs, with the header \`Authorization: Bearer ${P.tokenPlaceholder}\`. The proxy puts that login's token in place of \`${P.tokenPlaceholder}\` and makes the call. Codex usage calls also send a \`chatgpt-account-id\` header with the account id from the login's \`id_token\`, so a login in a ChatGPT workspace, or with several accounts, gets that account's usage and not the default one's.
 
 ### What it shows
 
@@ -156,21 +156,22 @@ The Status column reads the first of these that applies:
 
 - **Disabled in proxy**: the login is disabled in CLIProxyAPI. The tracker does not fetch it and keeps any numbers it had.
 - **As of** and an age: the row has earlier numbers but the last fetch failed, the proxy is down, or the tracker has just started from its saved snapshot. This holds even when the proxy flags the login. The row keeps the last numbers it had, each shown as "Last: N%", with the error under them, or in the banner when the proxy is down.
-- **Proxy unreachable**: the tracker cannot reach the proxy or its management key is missing or refused, and the row has no earlier numbers. The row is greyed and offers no sign-in.
+- **Proxy unreachable**: the tracker could not list the proxy's logins, and the row has no earlier numbers. Any failure of that list counts: the proxy does not answer, the management key is missing or refused, the proxy answers with another HTTP error, or the list it returns is malformed. The row is greyed and offers no sign-in.
 - **Rate limited**: the usage API answered 429 and the row has no earlier numbers. Under it: the time the login can be fetched again. Nothing fetches it at that time on its own; the next page load, **Refresh now** or sign-in watch does.
-- **Sign-in needed**: the proxy flags the login or marks it unavailable, or the fetch failed for another reason with no earlier numbers to show.
-- **Live**: the last fetch worked, and the proxy neither flags the login nor marks it unavailable.
+- **Sign-in needed**: the login's credential was rejected. Any of these marks it: the usage API answered 401 or 403; the proxy could not produce a token for the login; the proxy's status message starts with \`unauthorized\`, \`payment_required\`, \`invalid_grant\` or \`token expired\`; or a proxy cooldown on the login has the reason \`unauthorized\`, \`payment_required\` or \`invalid_grant\`, or HTTP status 401 or 403. Failing those, a login with any other cooldown, or whose status message is one of the proxy's cooldown or upstream-error markers such as \`quota exhausted\`, does not need a sign-in. Otherwise two more cases mark it: a status message that mentions 401, 403, unauthorized, authentication, permission, forbidden, invalid grant, revoked or expired; and a login the proxy marks unavailable with no status message and no retry time.
+- **Fetch failed**: the usage call failed for another reason, such as an upstream error, and the row has no earlier numbers. The error is shown under it.
+- **Live**: the last fetch worked and the login needs no new sign-in. CLIProxyAPI also marks a login unavailable during a quota cooldown (\`quota exhausted\`) or after an upstream error (\`transient upstream error\`); such a login stays Live with its current numbers, and the proxy's message shows under them.
 
 A window whose reset time has passed shows its last number as "Last: N%" and "current reset unknown" until the next fetch. Two proxy logins for the same account both appear, each warned "Same account as another login in the proxy."
 
 ### Signing in
 
-When a login needs attention (the proxy flags it, marks it unavailable, or its usage call fails for any reason but a rate limit) and the proxy is running, its row shows **Sign in again**. That button and **Add account** in the header open the proxy's sign-in page, \`${P.panelPath}\` on the proxy's address, in a new tab. Sign in there. The tracker page then refreshes every ${F.watchIntervalSeconds} seconds for up to ${F.watchTimeoutMinutes} minutes until a new login, or the one being signed in again, fetches fine, and reports "Signed in as" and the email, or "No new sign-in seen; try again". One watch runs at a time, and **Add account** stays off while the proxy is down.
+When a row reads **Sign-in needed**, or reads **As of** because of a rejected credential, and the proxy is running, the row shows **Sign in again**. A rate-limited login, a login in a proxy cooldown or after an upstream error, and a fetch that failed for another reason get no link: signing in again does not fix them. That button and **Add account** in the header open the proxy's sign-in page, \`${P.panelPath}\` on the proxy's address, in a new tab. Sign in there. The tracker page then refreshes every ${F.watchIntervalSeconds} seconds for up to ${F.watchTimeoutMinutes} minutes until a new login, or the one being signed in again, fetches fine with no auth failure reported (a cooldown flag does not hold it back), and reports "Signed in as" and the email, or "No new sign-in seen; try again". One watch runs at a time, and **Add account** stays off while the proxy is down.
 
 ### Polling
 
 - There is no poll timer. Each login is fetched at startup, on every page load, on **Refresh now** and every ${F.watchIntervalSeconds} seconds during a sign-in watch. Refreshes that arrive while a poll runs share it.
-- A login that fetched fine less than ${F.refetchHealthySeconds} seconds ago, that the proxy does not flag and does not mark unavailable, keeps its numbers instead of being fetched again, so a sign-in watch does not refetch every account every ${F.watchIntervalSeconds} seconds.
+- A login that fetched fine less than ${F.refetchHealthySeconds} seconds ago, with no auth failure reported, keeps its numbers instead of being fetched again (a quota cooldown or upstream-error flag from the proxy does not change that), so a sign-in watch does not refetch every account every ${F.watchIntervalSeconds} seconds.
 - A 429 from a usage API parks that login for the response's Retry-After time, or ${F.backoffMinutes} minutes without one. Polls in that time do not call the API for it; the first poll after it does.
 - The Claude plan comes from the profile endpoint, fetched after a login's usage call succeeds and then kept for as long as the tracker runs. A failed profile fetch is not kept, so the login's next successful usage fetch asks again.
 - Transcripts are rescanned every ${F.tokenScanSeconds} seconds and on every refresh. One scan runs at a time, and a refresh does not wait for it; while it runs, the token panels say "scanning...".
@@ -183,7 +184,7 @@ Each provider panel shows the total, split into uncached input, cache reads, cac
 
 Parsing follows [T3 Code](https://github.com/pingdotgg/t3code) (MIT) and ccusage: Claude lines are deduplicated by message id and request id (one message spans several transcript lines), Codex totals sum \`last_token_usage\` deltas with re-emitted duplicates dropped, and the parent history copied into a forked Codex rollout is skipped.
 
-Parsed records are cached per file in \`usage/.state/tokens/\`, keyed by size and mtime, so a rescan reads only files that changed, and a grown file only from where the last read stopped. Records are kept ${F.retentionDays} days from their timestamp, even after the CLI deletes the transcript, so history outlives Claude Code's \`cleanupPeriodDays\` (default 30; raise it in \`settings.json\` so the first scan can backfill further). A first scan of a large history takes minutes.
+Parsed records are cached per file in \`usage/.state/tokens/\`, keyed by size and mtime, so a rescan reads only files that changed, and a grown file only from where the last read stopped. Records are kept ${F.retentionDays} days from their timestamp, even after the CLI deletes the transcript or a numbered folder is deleted (each cache file names the folder it came from, and it keeps counting), so history outlives Claude Code's \`cleanupPeriodDays\` (default 30; raise it in \`settings.json\` so the first scan can backfill further). A first scan of a large history takes minutes.
 
 ### Endpoints used
 

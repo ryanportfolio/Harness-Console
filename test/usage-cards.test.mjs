@@ -37,7 +37,7 @@ test('cards: a future window keeps its percentage and level', () => {
 });
 
 test('cards: a failed fetch with cached data is stale "as of <age>" and offers sign-in to the proxy panel', () => {
-  const c = view([acct({ ok: false, stale: true, fetchedAt: iso(-1000), lastGoodAt: iso(-115 * H), error: 'usage API 401: sign in again' })]).cards[0];
+  const c = view([acct({ ok: false, stale: true, fetchedAt: iso(-1000), lastGoodAt: iso(-115 * H), error: 'usage API 401: sign in again', authRejected: true })]).cards[0];
   assert.equal(c.stale, true);
   assert.equal(c.staleLabel, 'as of 4d 19h ago');
   assert.equal(c.meta, 'as of 4d 19h ago');
@@ -71,8 +71,10 @@ test('cards: a rate-limited login with no numbers reads "Rate limited", offers n
   // once retryAt passes, the text says to refresh, not that it will retry
   const past = viewModel({ now: iso(0), proxy, accounts: [a] }, now + 11 * 60_000).cards[0];
   assert.match(past.error, /Press Refresh now/);
-  // an error that merely starts like a rate limit is not one without the flag
-  assert.deepEqual(view([acct({ ok: false, data: null, error: 'rate limited by usage API' })]).cards[0].signIn, { url: proxy.panelUrl });
+  // an error that merely starts like a rate limit is not one without the flag; nor is it a rejected login
+  const lookalike = view([acct({ ok: false, data: null, error: 'rate limited by usage API' })]).cards[0];
+  assert.equal(lookalike.statusText, 'Fetch failed');
+  assert.equal(lookalike.signIn, null);
   // a rate-limited row with numbers keeps "As of"
   assert.match(view([acct({ ok: false, stale: true, rateLimited: true, retryAt: iso(60_000) })]).cards[0].statusText, /^As of /);
 });
@@ -172,9 +174,9 @@ test('watchForLogin: gives up after the timeout, polling every interval', async 
 const win = (label, usedPercent, resetMs) => ({ label, usedPercent, resetsAt: iso(resetMs) });
 const ledger = () => view([
   acct({ data: { windows: [win('Session (5h)', 10, 2 * H), win('Weekly', 95, 4 * 24 * H), win('Weekly Fable', 0, 4 * 24 * H)], notes: [], warnings: [] } }),
-  acct({ id: 'claude:b@x.com', email: 'b@x.com', ok: false, stale: true, lastGoodAt: iso(-5 * 24 * H), error: 'usage API 401: sign in again',
+  acct({ id: 'claude:b@x.com', email: 'b@x.com', ok: false, stale: true, lastGoodAt: iso(-5 * 24 * H), error: 'usage API 401: sign in again', authRejected: true,
     data: { windows: [win('Session (5h)', 0, -H), win('Weekly', 100, -2 * H), win('Weekly Opus', 40, 24 * H)], notes: [], warnings: [] } }),
-  acct({ id: 'claude:c@x.com', email: 'c@x.com', ok: false, lastGoodAt: null, data: null, error: 'usage API 401: sign in again' }),
+  acct({ id: 'claude:c@x.com', email: 'c@x.com', ok: false, lastGoodAt: null, data: null, error: 'usage API 401: sign in again', authRejected: true }),
   acct({ id: 'claude:off@x.com', email: 'off@x.com', disabled: true, ok: false, stale: true }),
   acct({ id: 'codex:x@x.com', kind: 'codex', email: 'x@x.com', plan: 'ChatGPT Pro Max', data: { windows: [win('Weekly', 52, 5 * 24 * H)], notes: ['2 banked resets'], warnings: [] } }),
 ]);
@@ -281,4 +283,92 @@ test('watchForLogin: an ok fetch while the proxy still flags the target is not a
   assert.equal(r.account.id, 'claude:a@x.com'); // the flagged new login never counted
   assert.equal(polls, 4);
   assert.equal(r.account.proxyMessage, '');
+});
+
+// CLIProxyAPI v8 flags a login for a rejected credential and for a cooldown alike; only the first needs a sign-in.
+const cooldownFlags = [
+  { proxyStatus: 'error', proxyMessage: 'quota exhausted', unavailable: true, proxyRetryAt: iso(30 * 60_000), proxyCooldowns: [{ reason: 'quota', httpStatus: 429, retryAt: iso(30 * 60_000) }] },
+  { proxyStatus: 'error', proxyMessage: 'transient upstream error', unavailable: true, proxyRetryAt: iso(60_000) },
+  { proxyStatus: 'error', proxyMessage: '{"type":"error","error":{"type":"rate_limit_error"}}', unavailable: true, proxyCooldowns: [{ reason: 'quota', httpStatus: 429 }] },
+  { proxyStatus: 'error', proxyMessage: '', unavailable: true, proxyRetryAt: iso(60_000) },
+];
+const authFlags = [
+  { proxyStatus: 'error', proxyMessage: 'unauthorized', unavailable: true, proxyRetryAt: iso(30 * 60_000) },
+  { proxyStatus: 'error', proxyMessage: 'unauthorized (refresh token invalid)', unavailable: true },
+  { proxyStatus: 'error', proxyMessage: 'invalid_grant', unavailable: true },
+  { proxyStatus: 'error', proxyMessage: 'payment_required', unavailable: true },
+  { proxyStatus: 'error', proxyMessage: 'token expired', unavailable: true },
+  { proxyStatus: 'error', proxyMessage: '{"error":{"type":"authentication_error"}}', unavailable: true, proxyCooldowns: [{ reason: 'unauthorized', httpStatus: 401 }] },
+  { proxyStatus: 'error', proxyMessage: 'OAuth token has been revoked', unavailable: true, proxyRetryAt: iso(60_000) },
+  { proxyStatus: 'error', proxyMessage: '', unavailable: true },
+];
+
+test('cards: a cooldown or upstream-error flag with an ok fetch is Live with current numbers, the message shown, no sign-in', () => {
+  for (const flags of cooldownFlags) {
+    const c = view([acct({ data: { windows: [win('Session (5h)', 30, 2 * H), win('Weekly', 60, 3 * 24 * H)], notes: [], warnings: [] }, ...flags })]).cards[0];
+    assert.equal(c.statusText, 'Live', JSON.stringify(flags));
+    assert.equal(c.signIn, null);
+    assert.equal(c.dim, false);
+    assert.deepEqual(c.cells.map(x => x.pctText), ['30% used', '60% used']);
+    if (flags.proxyMessage) assert.ok(c.error.includes(`Proxy says: ${flags.proxyMessage}`), c.error);
+    else assert.match(c.error, /unavailable/);
+  }
+});
+
+test('cards: a cooldown flag with a failed fetch follows the stale and rate-limit rules, never "Sign-in needed"', () => {
+  const [flags] = cooldownFlags;
+  const stale = view([acct({ ...flags, ok: false, stale: true, error: 'usage API 500: upstream down' })]).cards[0];
+  assert.match(stale.statusText, /^As of /);
+  assert.equal(stale.signIn, null);
+  const limited = view([acct({ ...flags, ok: false, data: null, rateLimited: true, retryAt: iso(60_000), error: 'rate limited by usage API' })]).cards[0];
+  assert.equal(limited.statusText, 'Rate limited');
+  assert.equal(limited.signIn, null);
+  const empty = view([acct({ ...flags, ok: false, data: null, lastGoodAt: null, error: 'usage API 500: upstream down' })]).cards[0];
+  assert.equal(empty.statusText, 'Fetch failed');
+  assert.equal(empty.signIn, null);
+  assert.match(empty.error, /usage API 500[\s\S]*Proxy says: quota exhausted/);
+});
+
+test('cards: an auth-failure flag, or a usage API 401/403, reads "Sign-in needed" with the sign-in link', () => {
+  for (const flags of authFlags) {
+    const c = view([acct(flags)]).cards[0];
+    assert.equal(c.statusText, 'Sign-in needed', JSON.stringify(flags));
+    assert.deepEqual(c.signIn, { url: proxy.panelUrl });
+  }
+  for (const status of [401, 403]) {
+    const c = view([acct({ ok: false, data: null, lastGoodAt: null, authRejected: true, error: `usage API ${status}: the proxy's token for this login was rejected` })]).cards[0];
+    assert.equal(c.statusText, 'Sign-in needed');
+    assert.deepEqual(c.signIn, { url: proxy.panelUrl });
+  }
+});
+
+test('watchForLogin: a cooldown flag does not hold back a sign-in; an auth-failure flag does', async () => {
+  for (const flags of cooldownFlags) {
+    const c = clock();
+    const poll = async () => ({ accounts: [{ id: 'claude:a@x.com', ok: true, fetchedAt: c.iso(), ...flags }, { id: 'claude:new@x.com', ok: true, fetchedAt: c.iso(), ...flags }] });
+    const target = await watchForLogin({ poll, knownIds: ['claude:a@x.com', 'claude:new@x.com'], targetId: 'claude:a@x.com', sleep: c.sleep, now: c.now });
+    assert.equal(target.found, true, JSON.stringify(flags));
+    const added = await watchForLogin({ poll, knownIds: ['claude:a@x.com'], sleep: c.sleep, now: c.now });
+    assert.equal(added.account.id, 'claude:new@x.com');
+  }
+  for (const flags of authFlags) {
+    const c = clock();
+    const poll = async () => ({ accounts: [{ id: 'claude:a@x.com', ok: true, fetchedAt: c.iso(), ...flags }, { id: 'claude:new@x.com', ok: true, fetchedAt: c.iso(), ...flags }] });
+    assert.deepEqual(await watchForLogin({ poll, knownIds: ['claude:a@x.com'], targetId: 'claude:a@x.com', sleep: c.sleep, now: c.now }), { found: false }, JSON.stringify(flags));
+  }
+});
+
+test('ledger: a Live row with no current weekly number never makes the summary say no account is live', () => {
+  const sessionOnly = view([acct({ data: { windows: [win('Session (5h)', 30, 2 * H)], notes: [], warnings: [] } })]);
+  const expiredWeekly = view([acct({ data: { windows: [win('Session (5h)', 30, 2 * H), win('Weekly', 80, -H)], notes: [], warnings: [] } })]);
+  for (const v of [sessionOnly, expiredWeekly]) {
+    assert.equal(v.cards[0].statusText, 'Live');
+    assert.doesNotMatch(v.summary, /No account has live numbers/);
+    assert.equal(v.summary, 'No live account has a current weekly number right now.');
+  }
+  // A weekly number with no reset time still names the account.
+  const noReset = view([acct({ data: { windows: [{ label: 'Weekly', usedPercent: 0, resetsAt: null }], notes: [], warnings: [] } })]);
+  assert.equal(noReset.summary, 'a@x.com is at 0% weekly.');
+  // Nothing Live at all: the old sentence still holds.
+  assert.equal(view([acct({ ok: false, stale: true })]).summary, 'No account has live numbers right now.');
 });

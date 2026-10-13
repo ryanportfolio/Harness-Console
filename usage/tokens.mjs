@@ -115,6 +115,31 @@ export async function transcriptDirs(env = process.env) {
   return out;
 }
 
+// Cache file name for one transcript dir. Lossy (every run of other characters becomes "_"), so
+// the cache also stores its kind and dir.
+export const cacheName = (kind, dir) => `${kind}-${dir.replace(/[^\w.-]+/g, "_")}.json`;
+
+// The { kind, dir } a saved cache belongs to, or null when it holds nothing this version reads.
+// Caches written before kind and dir were stored carry them only in their transcript paths
+// (<dir>/projects/... or <dir>/sessions/...); of the possible cut points, the one whose dir gives
+// back this file's name wins.
+export async function cacheOwner(cacheFile) {
+  let c;
+  try { c = JSON.parse(await readFile(cacheFile, "utf8")); } catch { return null; }
+  if (c?.version !== CACHE_VERSION || !c.files || typeof c.files !== "object") return null;
+  if (LAYOUT[c.kind] && typeof c.dir === "string" && c.dir) return { kind: c.kind, dir: c.dir };
+  const name = path.basename(cacheFile);
+  const found = [];
+  for (const [kind, { sub }] of Object.entries(LAYOUT)) {
+    if (!name.startsWith(`${kind}-`)) continue;
+    for (const p of Object.keys(c.files)) {
+      const re = new RegExp(`[\\\\/]${sub}[\\\\/]`, "g");
+      for (let m; (m = re.exec(p));) found.push({ kind, dir: p.slice(0, m.index) });
+    }
+  }
+  return found.find((o) => cacheName(o.kind, o.dir) === name) ?? found[0] ?? null;
+}
+
 async function listJsonl(root) {
   let names;
   try { names = await readdir(root, { recursive: true }); } catch { return []; }
@@ -168,7 +193,7 @@ export class TokenScanner {
 
   async save() {
     const files = Object.fromEntries(this.files);
-    await this.writeAtomic(this.cacheFile, JSON.stringify({ version: CACHE_VERSION, files }));
+    await this.writeAtomic(this.cacheFile, JSON.stringify({ version: CACHE_VERSION, kind: this.acct.kind, dir: this.acct.dir, files }));
   }
 
   scan() {

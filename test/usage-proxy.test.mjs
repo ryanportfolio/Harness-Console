@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TokenScanner, transcriptDirs } from '../usage/tokens.mjs';
+import { viewModel, watchForLogin } from '../usage/cards.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ALLOWED = new Set(['https://api.anthropic.com/api/oauth/usage', 'https://api.anthropic.com/api/oauth/profile', 'https://chatgpt.com/backend-api/wham/usage']);
@@ -36,6 +37,8 @@ function startStub(key, fx, calls, port = 0) {
         const j = JSON.parse(body);
         const accountKey = Object.keys(j.header ?? {}).find(k => k.toLowerCase() === 'chatgpt-account-id');
         calls.push({ url: j.url, authIndex: j.authIndex, auth: j.header?.Authorization, accountHeader: accountKey ? j.header[accountKey] : undefined });
+        // fx.apiError: the proxy itself refuses the call, as when it has no usable token for the login.
+        if (fx.apiError?.[j.authIndex]) return send(400, { error: fx.apiError[j.authIndex] });
         const fail = fx.fail[j.authIndex];
         if (fail) return send(200, { status_code: fail, header: fx.failHeader?.[j.authIndex] ?? {}, body: '{"error":"upstream down"}' });
         if (j.url.endsWith('/oauth/profile')) return send(200, { status_code: 200, header: {}, body: JSON.stringify(profile) });
@@ -485,4 +488,190 @@ test('transcript dirs: the CLI default dirs are scanned even before they exist, 
   assert.equal(s.summary(7, null).files, 1);
   assert.equal(s.summary(7, null).total, 10);
   assert.deepEqual(logs.filter(m => /error|ENOENT/i.test(m)), []);
+});
+
+test('a cooldown flag keeps a login Live and inside the 60 s skip; an auth-failure flag reads Sign-in needed', async t => {
+  const tmp = await mkdtemp(path.join(tmpdir(), 'usage-cooldown-test-'));
+  const key = randomBytes(24).toString('hex');
+  const proxyDir = path.join(tmp, 'proxy'), stateDir = path.join(tmp, 'state'), home = path.join(tmp, 'home');
+  for (const d of [proxyDir, stateDir, home, path.join(tmp, 'claude'), path.join(tmp, 'codex')]) await mkdir(d, { recursive: true });
+  await writeFile(path.join(stateDir, 'pricing.json'), JSON.stringify({ fetchedAt: Date.now(), rates: {} }));
+  // The fields CLIProxyAPI v8.0.15 lists for a 429 cooldown and for a rejected credential.
+  const later = new Date(Date.now() + 30 * 60_000).toISOString();
+  const cooldown = auth_index => ({ provider: 'claude', email: `${auth_index}@example.com`, name: `${auth_index}.json`, auth_index, disabled: false, status: 'error', status_message: 'quota exhausted', unavailable: true, next_retry_after: later, cooldowns: [{ scope: 'credential', reason: 'quota', retry_at: later, remaining_seconds: 1800, http_status: 429 }] });
+  const rejected = auth_index => ({ provider: 'claude', email: `${auth_index}@example.com`, name: `${auth_index}.json`, auth_index, disabled: false, status: 'error', status_message: 'unauthorized', unavailable: true, next_retry_after: later, cooldowns: [{ scope: 'credential', reason: 'unauthorized', retry_at: later, remaining_seconds: 1800, http_status: 401 }] });
+  const fx = { files: [cooldown('cd'), rejected('au')], fail: {} };
+  const calls = [];
+  const stub = await startStub(key, fx, calls);
+  await writeFile(path.join(proxyDir, 'config.yaml'), `port: ${stub.address().port}\n`);
+  await writeFile(path.join(proxyDir, 'dashboard-key.txt'), key);
+  const port = await freePort();
+  const base = `http://127.0.0.1:${port}`;
+  const child = startTracker({ USAGE_PORT: String(port), USAGE_PROXY_DIR: proxyDir, USAGE_STATE_DIR: stateDir, CLAUDE_CONFIG_DIR: path.join(tmp, 'claude'), CODEX_HOME: path.join(tmp, 'codex'), USERPROFILE: home, HOME: home }, { text: '' });
+  t.after(async () => {
+    child.kill();
+    await stopStub(stub);
+    await new Promise(r => setTimeout(r, 300));
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
+  });
+  const usage = async () => (await fetch(`${base}/api/usage`)).json();
+  const refresh = async () => assert.equal((await fetch(`${base}/api/refresh`, { method: 'POST', headers: { origin: base, 'x-usage-request': '1' } })).status, 204);
+  const usageCalls = idx => calls.filter(c => c.authIndex === idx && c.url.endsWith('/usage')).length;
+  // Before both fixture reset times, so the numbers read as current whatever today's date is.
+  const vmAt = Date.parse('2026-10-12T00:00:00Z');
+
+  await waitFor(async () => { const j = await usage(); return j.accounts.length === 2 && j.accounts.every(a => a.ok) && j; }, 'first poll');
+  await refresh();
+  await refresh();
+  assert.equal(usageCalls('cd'), 1, 'a cooldown-flagged login fetched under a minute ago is not fetched again');
+  assert.equal(usageCalls('au'), 3, 'a login with a rejected credential is fetched on every refresh');
+
+  const vm = viewModel(await usage(), vmAt);
+  const cd = vm.cards.find(c => c.id === 'claude:cd'), au = vm.cards.find(c => c.id === 'claude:au');
+  assert.equal(cd.statusText, 'Live');
+  assert.equal(cd.signIn, null);
+  assert.deepEqual(cd.cells.map(x => x.pctText), ['12% used', '40% used']);
+  assert.match(cd.error, /Proxy says: quota exhausted/);
+  assert.equal(au.statusText, 'Sign-in needed');
+  assert.deepEqual(au.signIn, { url: `http://127.0.0.1:${stub.address().port}/management.html#/oauth` });
+
+  // The sign-in watch, as the page runs it: a new login under a cooldown counts, one with a rejected credential does not.
+  const poll = async () => { await refresh(); return usage(); };
+  fx.files.push(cooldown('cn'));
+  const added = await watchForLogin({ poll, knownIds: ['claude:cd', 'claude:au'], intervalMs: 50, timeoutMs: 10_000 });
+  assert.equal(added.found, true);
+  assert.equal(added.account.id, 'claude:cn');
+  fx.files.push(rejected('an'));
+  const waited = await watchForLogin({ poll, knownIds: ['claude:cd', 'claude:au', 'claude:cn'], intervalMs: 50, timeoutMs: 1500 });
+  assert.deepEqual(waited, { found: false });
+  assert(usageCalls('an') >= 2, 'the rejected login was fetched while the watch waited');
+  assert.equal(usageCalls('cd'), 1, 'the watch never re-fetched the cooldown-flagged login inside its minute');
+});
+
+test('a usage API 403 or a token the proxy cannot refresh reads as a rejected credential; another failure with no numbers does not', async t => {
+  const tmp = await mkdtemp(path.join(tmpdir(), 'usage-403-test-'));
+  const key = randomBytes(24).toString('hex');
+  const proxyDir = path.join(tmp, 'proxy'), stateDir = path.join(tmp, 'state'), home = path.join(tmp, 'home');
+  for (const d of [proxyDir, stateDir, home, path.join(tmp, 'claude'), path.join(tmp, 'codex')]) await mkdir(d, { recursive: true });
+  await writeFile(path.join(stateDir, 'pricing.json'), JSON.stringify({ fetchedAt: Date.now(), rates: {} }));
+  const login = (auth_index) => ({ provider: 'claude', email: `${auth_index}@example.com`, name: `${auth_index}.json`, auth_index, disabled: false, status: 'active', status_message: '', unavailable: false });
+  const fx = { files: [login('cf'), login('ce'), login('ct')], fail: { cf: 403, ce: 500 }, apiError: { ct: 'auth token refresh failed' } };
+  const stub = await startStub(key, fx, []);
+  await writeFile(path.join(proxyDir, 'config.yaml'), `port: ${stub.address().port}\n`);
+  await writeFile(path.join(proxyDir, 'dashboard-key.txt'), key);
+  const port = await freePort();
+  const base = `http://127.0.0.1:${port}`;
+  const child = startTracker({ USAGE_PORT: String(port), USAGE_PROXY_DIR: proxyDir, USAGE_STATE_DIR: stateDir, CLAUDE_CONFIG_DIR: path.join(tmp, 'claude'), CODEX_HOME: path.join(tmp, 'codex'), USERPROFILE: home, HOME: home }, { text: '' });
+  t.after(async () => {
+    child.kill();
+    await stopStub(stub);
+    await new Promise(r => setTimeout(r, 300));
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
+  });
+  const u = await waitFor(async () => { const j = await (await fetch(`${base}/api/usage`)).json(); return j.accounts.length === 3 && j.accounts.every(a => a.fetchedAt) && j; }, 'first poll');
+  const vm = viewModel(u);
+  const forbidden = vm.cards.find(c => c.id === 'claude:cf'), down = vm.cards.find(c => c.id === 'claude:ce');
+  assert.equal(forbidden.statusText, 'Sign-in needed');
+  assert(forbidden.signIn);
+  assert.match(forbidden.error, /usage API 403/);
+  // The proxy cannot refresh the login's token: also a sign-in.
+  const noToken = vm.cards.find(c => c.id === 'claude:ct');
+  assert.equal(noToken.statusText, 'Sign-in needed');
+  assert(noToken.signIn);
+  assert.equal(down.statusText, 'Fetch failed');
+  assert.equal(down.signIn, null);
+});
+
+test('a usage API 401 through api-call reads Sign-in needed, and the next good fetch clears it', async t => {
+  const tmp = await mkdtemp(path.join(tmpdir(), 'usage-401-test-'));
+  const key = randomBytes(24).toString('hex');
+  const proxyDir = path.join(tmp, 'proxy'), stateDir = path.join(tmp, 'state'), home = path.join(tmp, 'home');
+  for (const d of [proxyDir, stateDir, home, path.join(tmp, 'claude'), path.join(tmp, 'codex')]) await mkdir(d, { recursive: true });
+  await writeFile(path.join(stateDir, 'pricing.json'), JSON.stringify({ fetchedAt: Date.now(), rates: {} }));
+  // The proxy reports nothing wrong with the login: only the usage API's 401 says the token was rejected.
+  const login = { provider: 'claude', email: 'cu@example.com', name: 'cu.json', auth_index: 'cu', disabled: false, status: 'active', status_message: '', unavailable: false };
+  const fx = { files: [login], fail: { cu: 401 } };
+  const calls = [];
+  const stub = await startStub(key, fx, calls);
+  await writeFile(path.join(proxyDir, 'config.yaml'), `port: ${stub.address().port}\n`);
+  await writeFile(path.join(proxyDir, 'dashboard-key.txt'), key);
+  const port = await freePort();
+  const base = `http://127.0.0.1:${port}`;
+  const child = startTracker({ USAGE_PORT: String(port), USAGE_PROXY_DIR: proxyDir, USAGE_STATE_DIR: stateDir, CLAUDE_CONFIG_DIR: path.join(tmp, 'claude'), CODEX_HOME: path.join(tmp, 'codex'), USERPROFILE: home, HOME: home }, { text: '' });
+  t.after(async () => {
+    child.kill();
+    await stopStub(stub);
+    await new Promise(r => setTimeout(r, 300));
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
+  });
+  const usage = async () => (await fetch(`${base}/api/usage`)).json();
+  // Before both fixture reset times, so the numbers read as current whatever today's date is.
+  const vmAt = Date.parse('2026-10-12T00:00:00Z');
+
+  const u = await waitFor(async () => { const j = await usage(); return j.accounts.length === 1 && j.accounts[0].fetchedAt && j; }, 'first poll');
+  assert(calls.some(c => c.authIndex === 'cu' && c.url.endsWith('/oauth/usage')), 'the usage API was called through api-call');
+  assert.equal(u.accounts[0].authRejected, true);
+  const rejected = viewModel(u, vmAt).cards[0];
+  assert.equal(rejected.statusText, 'Sign-in needed');
+  assert.deepEqual(rejected.signIn, { url: `http://127.0.0.1:${stub.address().port}/management.html#/oauth` });
+  assert.match(rejected.error, /usage API 401/);
+
+  // The user signed in again: the usage API answers 200 and the next refresh clears the flag.
+  delete fx.fail.cu;
+  assert.equal((await fetch(`${base}/api/refresh`, { method: 'POST', headers: { origin: base, 'x-usage-request': '1' } })).status, 204);
+  const after = await usage();
+  assert.equal(after.accounts[0].ok, true);
+  assert.equal(after.accounts[0].authRejected, false);
+  const cleared = viewModel(after, vmAt).cards[0];
+  assert.equal(cleared.statusText, 'Live');
+  assert.equal(cleared.signIn, null);
+  assert.deepEqual(cleared.cells.map(x => x.pctText), ['12% used', '40% used']);
+});
+
+test('saved token records of a deleted numbered dir still count in /api/tokens', async t => {
+  const tmp = await mkdtemp(path.join(tmpdir(), 'usage-gone-test-'));
+  const stateDir = path.join(tmp, 'state'), home = path.join(tmp, 'home');
+  const claudeDir = path.join(tmp, 'claude'), codexDir = path.join(tmp, 'codex');
+  for (const d of [stateDir, path.join(stateDir, 'tokens'), home, claudeDir, codexDir, path.join(tmp, 'proxy')]) await mkdir(d, { recursive: true });
+  await writeFile(path.join(stateDir, 'pricing.json'), JSON.stringify({ fetchedAt: Date.now(), rates: {} }));
+  const stamp = new Date().toISOString();
+  // ~/.claude-2 and ~/.codex-3 each hold one transcript; the real scanner caches them under the server's file names.
+  const gone = { claude: path.join(home, '.claude-2'), codex: path.join(home, '.codex-3') };
+  await mkdir(path.join(gone.claude, 'projects', 'p'), { recursive: true });
+  await writeFile(path.join(gone.claude, 'projects', 'p', 's.jsonl'), JSON.stringify({ type: 'assistant', timestamp: stamp, requestId: 'r1', message: { id: 'm1', model: 'claude-x', usage: { input_tokens: 100, output_tokens: 50 } } }) + '\n');
+  await mkdir(path.join(gone.codex, 'sessions', '2026'), { recursive: true });
+  await writeFile(path.join(gone.codex, 'sessions', '2026', 'r.jsonl'), [
+    { type: 'session_meta', timestamp: stamp, payload: { id: 's1' } },
+    { type: 'turn_context', timestamp: stamp, payload: { model: 'gpt-x' } },
+    { type: 'event_msg', timestamp: stamp, payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 20 } } } },
+  ].map(o => JSON.stringify(o)).join('\n') + '\n');
+  const writeAtomic = (file, text) => writeFile(file, text);
+  const cacheFile = (kind, dir) => path.join(stateDir, 'tokens', `${kind}-${dir.replace(/[^\w.-]+/g, '_')}.json`);
+  for (const kind of ['claude', 'codex']) {
+    const s = new TokenScanner({ name: kind, kind, dir: gone[kind] }, cacheFile(kind, gone[kind]), writeAtomic, () => {});
+    await s.scan();
+    assert.equal(s.summary(7, null).total, kind === 'claude' ? 150 : 120);
+  }
+  // A cache written before caches stored their kind and dir: only its transcript paths say where it came from.
+  const legacy = JSON.parse(await readFile(cacheFile('codex', gone.codex), 'utf8'));
+  delete legacy.kind; delete legacy.dir;
+  await writeFile(cacheFile('codex', gone.codex), JSON.stringify(legacy));
+  await rm(gone.claude, { recursive: true, force: true });
+  await rm(gone.codex, { recursive: true, force: true });
+
+  const port = await freePort();
+  const output = { text: '' };
+  const child = startTracker({ USAGE_PORT: String(port), USAGE_PROXY_DIR: path.join(tmp, 'proxy'), USAGE_STATE_DIR: stateDir, CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexDir, USERPROFILE: home, HOME: home }, output);
+  t.after(async () => {
+    child.kill();
+    await new Promise(r => setTimeout(r, 300));
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
+  });
+  const tokens = await waitFor(async () => { const j = await (await fetch(`http://127.0.0.1:${port}/api/tokens?days=7`)).json(); return !j.scanning && j.providers.every(p => p.lastScanAt) && j; }, 'token scan');
+  const [claude, codex] = tokens.providers;
+  assert.equal(claude.total, 150);
+  assert.equal(codex.total, 120);
+  assert(claude.dirs.includes(gone.claude), claude.dirs.join(','));
+  assert(codex.dirs.includes(gone.codex), codex.dirs.join(','));
+  assert.doesNotMatch(output.text, /tokens:.*(ENOENT|failed)/i);
 });

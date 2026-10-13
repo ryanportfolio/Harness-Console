@@ -171,7 +171,7 @@ function masthead(t, narrow) {
   const scale = `Clocks drain at ${SECONDS_PER_HOUR_OF_WINDOW} s per hour of window: a 5 h window empties every ${5 * SECONDS_PER_HOUR_OF_WINDOW} s, 7 days every ${168 * SECONDS_PER_HOUR_OF_WINDOW} s, 90 days every ${90 * 24 * SECONDS_PER_HOUR_OF_WINDOW} s.`;
   for (const line of wrap(scale, W - 2 * px, lsize)) { body.push(`<text x="${px}" y="${y}" class="mut" font-size="${lsize}">${esc(line)}</text>`); y += lsize * 1.5; }
   y += lsize * 0.5;
-  const onLoad = `${ON_LOAD}: no poll timer. Each login is fetched through CLIProxyAPI at startup, on every page load and on Refresh now; one fetched fine under ${F.refetchHealthySeconds} s ago, and neither flagged nor marked unavailable by the proxy, keeps its numbers.`;
+  const onLoad = `${ON_LOAD}: no poll timer. Each login is fetched through CLIProxyAPI at startup, on every page load and on Refresh now; one fetched fine under ${F.refetchHealthySeconds} s ago, with no auth failure reported by the proxy, keeps its numbers.`;
   for (const line of wrap(onLoad, W - 2 * px, lsize)) { body.push(`<text x="${px}" y="${y}" class="mut" font-size="${lsize}">${esc(line)}</text>`); y += lsize * 1.5; }
 
   const H = Math.ceil(y + (narrow ? 24 : 32));

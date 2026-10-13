@@ -33,9 +33,32 @@ function windowView(w, now) {
   return { label: w.label, pct, pctText: `${Math.round(pct)}% used`, resetText, level: level(pct) };
 }
 
-// A login that fetched fine and that the proxy does not flag. Anything else offers sign-in, and the
-// sign-in watch waits for exactly this before it reports success.
-export const healthy = (a) => !!a?.ok && !a.proxyMessage && !a.unavailable;
+// CLIProxyAPI (v8) marks a login unavailable and sets status_message for a rejected credential and for
+// a quota cooldown or upstream error alike (sdk/cliproxy/auth/conductor_cooldown.go applyAuthFailureState).
+// These tell them apart: the markers it writes itself, then the reason of each live cooldown
+// (sdk/cliproxy/auth/cooldown_view.go), then the text of a raw upstream message as a last resort.
+const AUTH_MARKER = /^(unauthorized|payment_required|invalid[_ ]grant|token expired)\b/i;
+const COOLDOWN_MARKER = /^(quota exhausted|quota|transient upstream error|cloudflare challenge|request failed|not_found|model_not_supported)$/i;
+const AUTH_REASONS = ["unauthorized", "payment_required", "invalid_grant"];
+const AUTH_TEXT = /\b40[13]\b|unauthori[sz]ed|authenticat|permission|forbidden|invalid[_ ]grant|revoked|expired/i;
+
+// Only a rejected credential needs a new sign-in: the usage API answered 401 or 403, or the proxy's
+// fields say so. A login flagged for a cooldown or an upstream error does not.
+export function signInNeeded(a) {
+  if (!a) return false;
+  if (a.authRejected) return true;
+  const msg = String(a.proxyMessage ?? "").trim();
+  const cooldowns = a.proxyCooldowns ?? [];
+  if (AUTH_MARKER.test(msg) || cooldowns.some((c) => AUTH_REASONS.includes(c.reason) || c.httpStatus === 401 || c.httpStatus === 403)) return true;
+  if (cooldowns.length || COOLDOWN_MARKER.test(msg)) return false;
+  if (msg) return AUTH_TEXT.test(msg);
+  // Unavailable with no message: a retry time means a cooldown; none means a token the proxy cannot use.
+  return !!a.unavailable && !a.proxyRetryAt;
+}
+
+// A login that fetched fine and needs no new sign-in. The sign-in watch waits for exactly this
+// before it reports success.
+export const healthy = (a) => !!a?.ok && !signInNeeded(a);
 
 // "Fri 10:00 PM" (the weekday only when the time is not today), "10:00 PM"
 function clockText(t, now) {
@@ -87,7 +110,14 @@ function summaryText(accounts, cards, now) {
   const full = claude.find((r) => r.pct >= 90);
   if (full) parts.push(`${full.title} is at ${full.pct}% weekly and resets ${dayAt(full.reset, now)}.`);
   else if (claude.length) parts.push(`${claude[0].title} resets ${dayAt(claude[0].reset, now)}.`);
-  return parts.join(" ") || "No account has live numbers right now.";
+  else {
+    // A weekly number with no reset time (an unused week can report none): name the fullest.
+    const top = rows.filter((r) => r.kind === "claude").sort((a, b) => b.pct - a.pct)[0];
+    if (top) parts.push(`${top.title} is at ${top.pct}% weekly.`);
+  }
+  if (parts.length) return parts.join(" ");
+  // Live rows can still lack a current weekly number: a session window only, or a weekly reset already passed.
+  return cards.some((c) => c.statusText === "Live") ? "No live account has a current weekly number right now." : "No account has live numbers right now.";
 }
 
 // A 429 parks a login until retryAt (set by the server). Nothing fetches it when that time comes: the
@@ -126,8 +156,8 @@ export function viewModel(payload, now = Date.parse(payload.now)) {
     const staleLabel = stale ? (when ? `as of ${ago(when, now)}` : "as of an unknown time") : null;
     const notes = [...(d?.notes ?? [])];
     if (a.disabled) notes.unshift("disabled in proxy");
-    // Signing in again fixes a rejected or missing login, not a down proxy or a rate limit.
-    const broken = !a.disabled && !healthy(a);
+    // Signing in again fixes a rejected login, not a down proxy, a rate limit or a cooldown.
+    const broken = !a.disabled && signInNeeded(a);
     const rateLimited = !a.ok && !!a.rateLimited;
     // While the proxy is down every card carries the same error; the banner says it once.
     const error = a.disabled || !proxy.ok ? null : [a.ok ? null : rateLimited ? rateLimitText(a.retryAt, now) : a.error, a.proxyMessage ? `Proxy says: ${a.proxyMessage}` : null, a.unavailable ? "The proxy marks this login unavailable." : null].filter(Boolean).join("\n") || null;
@@ -153,8 +183,9 @@ export function viewModel(payload, now = Date.parse(payload.now)) {
       windows: (d?.windows ?? []).map((w) => windowView(w, now)),
       notes,
       cells: columns.map((col) => cellView(col, (d?.windows ?? []).find((w) => w.label === col), now, stale)),
-      // A login the proxy flags still has live numbers, but signing in is what it needs.
-      statusText: a.disabled ? "Disabled in proxy" : stale ? `As of ${when ? ago(when, now) : "an unknown time"}` : !proxy.ok ? "Proxy unreachable" : rateLimited ? "Rate limited" : broken ? "Sign-in needed" : "Live",
+      // A rejected login still has live numbers, but signing in is what it needs. A cooldown with an ok
+      // fetch is Live, the proxy's message beside it; a failed fetch with nothing to show is "Fetch failed".
+      statusText: a.disabled ? "Disabled in proxy" : stale ? `As of ${when ? ago(when, now) : "an unknown time"}` : !proxy.ok ? "Proxy unreachable" : rateLimited ? "Rate limited" : broken ? "Sign-in needed" : !a.ok ? "Fetch failed" : "Live",
     };
   });
   // Before the first proxy check nothing is known yet, so neither the ledger nor the header may read as a real empty state.
@@ -169,7 +200,8 @@ export function viewModel(payload, now = Date.parse(payload.now)) {
 
 // After the user opens the proxy's sign-in page: poll until a login appears that was not there
 // before, or the account being signed in again fetches fine, or the timeout passes. "Fine" is
-// healthy(): an ok fetch while the proxy still flags the login does not count.
+// healthy(): an ok fetch while the proxy still reports a rejected credential does not count; one
+// under a cooldown or upstream-error flag does.
 export async function watchForLogin({ poll, knownIds = [], targetId = null, intervalMs = 5000, timeoutMs = 600000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now }) {
   const known = new Set(knownIds);
   const start = now();

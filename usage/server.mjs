@@ -6,10 +6,11 @@ import { readFile, writeFile, rename, mkdir, stat, readdir, unlink } from "node:
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { TokenScanner, transcriptDirs } from "./tokens.mjs";
+import { TokenScanner, transcriptDirs, cacheName, cacheOwner } from "./tokens.mjs";
 import { Pricing } from "./pricing.mjs";
 import { localRequest } from "./guard.mjs";
 import { listAuthFiles, upstreamGet, proxyLocation } from "./proxy.mjs";
+import { signInNeeded } from "./cards.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -27,7 +28,7 @@ await mkdir(STATE_DIR, { recursive: true });
 
 const RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000; // /api/oauth/usage 429s on fast polling
 const TOKEN_SCAN_MS = 300 * 1000;
-// The sign-in watch posts /api/refresh every 5 s; a healthy login is re-fetched at most this often.
+// The sign-in watch posts /api/refresh every 5 s; a login that needs no new sign-in is re-fetched at most this often.
 const REFETCH_HEALTHY_MS = 60 * 1000;
 
 // ---------- shared ----------
@@ -60,12 +61,17 @@ const rateLimited = (state) => Object.assign(new Error("rate limited by usage AP
 // One usage call through the proxy with the shared error handling: 429 parks the account.
 async function usageBody(file, state, accountId = null) {
   if (state.backoffUntil && Date.now() < state.backoffUntil) throw rateLimited(state);
-  const r = await upstreamGet(file.auth_index, file.provider, "usage", accountId);
+  let r;
+  try { r = await upstreamGet(file.auth_index, file.provider, "usage", accountId); } catch (e) {
+    // api-call answers 400 "auth token refresh failed" or "auth token not found" when the proxy has no usable token for the login.
+    if (/api-call HTTP 400: auth token/.test(e.message)) e.authRejected = true;
+    throw e;
+  }
   if (r.status === 429) {
     state.backoffUntil = Date.now() + retryAfterMs(r.headers, RATE_LIMIT_BACKOFF_MS);
     throw rateLimited(state);
   }
-  if (r.status === 401) throw new Error("usage API 401: the proxy's token for this login was rejected; sign in again in the proxy panel");
+  if (r.status === 401 || r.status === 403) throw Object.assign(new Error(`usage API ${r.status}: the proxy's token for this login was rejected; sign in again in the proxy panel`), { authRejected: true });
   if (!r.ok) throw new Error(`usage API ${r.status}: ${r.text.slice(0, 160)}`);
   return r.json ?? {};
 }
@@ -194,7 +200,7 @@ let proxy = { ok: false, ...(await proxyLocation()), error: "not checked yet", c
 try {
   const c = JSON.parse(await readFile(CACHE_FILE, "utf8"));
   for (const a of Object.values(c.accounts ?? {})) {
-    if (a?.id && a.data) accounts.set(a.id, { ...a, ok: false, stale: true, fetchedAt: null, error: null, rateLimited: false, retryAt: null });
+    if (a?.id && a.data) accounts.set(a.id, { ...a, ok: false, stale: true, fetchedAt: null, error: null, rateLimited: false, retryAt: null, authRejected: false });
   }
 } catch { /* none */ }
 
@@ -215,8 +221,9 @@ async function pollAccount(f, entry) {
   if (entry.disabled) {
     return { ...entry, ok: false, stale: !!prev?.data, fetchedAt: prev?.fetchedAt ?? null, lastGoodAt: prev?.lastGoodAt ?? null, error: null, data: prev?.data ?? null };
   }
-  // Fetched fine moments ago and the proxy does not flag it: keep those numbers, refresh the listing fields.
-  if (prev?.ok && !entry.proxyMessage && !entry.unavailable && prev.fetchedAt && Date.now() - Date.parse(prev.fetchedAt) < REFETCH_HEALTHY_MS) {
+  // Fetched fine moments ago and the proxy reports no rejected credential (a cooldown or upstream-error
+  // flag does not count): keep those numbers, refresh the listing fields.
+  if (prev?.ok && !signInNeeded(entry) && prev.fetchedAt && Date.now() - Date.parse(prev.fetchedAt) < REFETCH_HEALTHY_MS) {
     return { ...prev, ...entry, plan: entry.plan || prev.plan || "" };
   }
   const st = pollState.get(entry.id) ?? {};
@@ -228,7 +235,7 @@ async function pollAccount(f, entry) {
   } catch (e) {
     log(`[${entry.id}] ${e.message ?? e}`);
     const retryAt = e.retryAt ? new Date(e.retryAt).toISOString() : null;
-    return { ...entry, plan: entry.plan || prev?.plan || "", ok: false, stale: !!prev?.data, fetchedAt: now, lastGoodAt: prev?.lastGoodAt ?? null, error: String(e.message ?? e), rateLimited: !!retryAt, retryAt, data: prev?.data ?? null };
+    return { ...entry, plan: entry.plan || prev?.plan || "", ok: false, stale: !!prev?.data, fetchedAt: now, lastGoodAt: prev?.lastGoodAt ?? null, error: String(e.message ?? e), rateLimited: !!retryAt, retryAt, authRejected: !!e.authRejected, data: prev?.data ?? null };
   }
 }
 
@@ -259,8 +266,12 @@ async function poll() {
       proxyStatus: f.status ?? null,
       proxyMessage: f.status_message || null,
       unavailable: !!f.unavailable,
+      // What the proxy's flag is for (see signInNeeded in cards.mjs): its retry time and live cooldowns.
+      proxyRetryAt: f.next_retry_after || null,
+      proxyCooldowns: (Array.isArray(f.cooldowns) ? f.cooldowns : []).map((c) => ({ reason: String(c?.reason ?? ""), httpStatus: Number(c?.http_status) || null, retryAt: c?.retry_at ?? null })),
       rateLimited: false,
       retryAt: null,
+      authRejected: false,
     };
     return pollAccount(f, entry);
   }));
@@ -296,10 +307,18 @@ const pricing = new Pricing(path.join(STATE_DIR, "pricing.json"), writeAtomic, l
 await pricing.load();
 // One scanner per transcript dir. Accounts that share a dir (logging out and back in with another
 // email) cannot be told apart in the transcripts, so totals are reported per provider, not per account.
+const TOKEN_DIR = path.join(STATE_DIR, "tokens");
 const scanners = [];
-for (const { kind, dir } of await transcriptDirs()) {
-  const file = path.join(STATE_DIR, "tokens", `${kind}-${dir.replace(/[^\w.-]+/g, "_")}.json`);
-  scanners.push(new TokenScanner({ name: `${kind} ${dir}`, kind, dir }, file, writeAtomic, log));
+const addScanner = (kind, dir, file) => scanners.push(new TokenScanner({ name: `${kind} ${dir}`, kind, dir }, file, writeAtomic, log));
+for (const { kind, dir } of await transcriptDirs()) addScanner(kind, dir, path.join(TOKEN_DIR, cacheName(kind, dir)));
+// Saved records of a dir that is gone (a deleted ~/.claude-<n>) keep counting for their 400 days.
+// Scanning a missing dir finds nothing; if the dir comes back, its new transcripts count again.
+for (const name of (await readdir(TOKEN_DIR)).sort()) {
+  const file = path.join(TOKEN_DIR, name);
+  if (!name.endsWith(".json") || scanners.some((s) => s.cacheFile.toLowerCase() === file.toLowerCase())) continue;
+  const owner = await cacheOwner(file);
+  if (!owner || scanners.some((s) => s.acct.kind === owner.kind && s.acct.dir.toLowerCase() === owner.dir.toLowerCase())) continue;
+  addScanner(owner.kind, owner.dir, file);
 }
 for (const s of scanners) await s.load();
 
