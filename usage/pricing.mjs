@@ -6,9 +6,11 @@ import { readFile } from "node:fs/promises";
 
 const RATES_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const TTL_MS = 24 * 3600 * 1000;
+// Codex model names LiteLLM lacks, priced at a listed model's rate.
+const DEFAULT_ALIASES = { "codex-auto-review": "gpt-5.6-sol", "gpt-reserve": "gpt-5.6-sol" };
 
 export class Pricing {
-  constructor(cacheFile, writeAtomic, log, aliases = {}) {
+  constructor(cacheFile, writeAtomic, log, aliases = DEFAULT_ALIASES) {
     this.cacheFile = cacheFile;
     this.aliases = aliases; // model -> model whose rate to use (for names LiteLLM lacks)
     this.writeAtomic = writeAtomic;

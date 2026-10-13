@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Usage</title>
+<link rel="icon" href="data:,">
 <style>
   /* Vellum style: one warm sand canvas, near-black ink, a single sans typeface
      doing all the hierarchy work, hairline rules instead of containers, zero
@@ -11,7 +12,8 @@
      Claude in bronze, Codex in ink; segments keep their alpha steps. Usage
      bars darken as they fill (hayfield, bronze, ink). */
   :root {
-    --bg: #f4e6cd; --card: #f4e6cd; --linen: #edddc3; --fg: #1e211e; --body: #1e211e; --muted: #8f774b; --line: #1e211e;
+    /* --muted is text: a darker shade of the bronze (#8f774b, 3.47:1 on --bg) that reaches 4.97:1. */
+    --bg: #f4e6cd; --card: #f4e6cd; --linen: #edddc3; --fg: #1e211e; --body: #1e211e; --muted: #735f3b; --line: #1e211e;
     --ok: #ba9d6a; --warn: #8f774b; --bad: #1e211e; --track: #edddc3;
     --claude: #8f774b; --codex: #1e211e; --accent: #1e211e;
     --sans: Verdana, Geneva, "DejaVu Sans", sans-serif;
@@ -25,43 +27,77 @@
   header .meta { color: var(--muted); font-size: 14px; text-transform: uppercase; letter-spacing: .04em; }
   button { font: 400 14px/1.5 var(--sans); text-transform: uppercase; letter-spacing: .04em; border: 0; border-radius: 0; padding: 0; background: transparent; color: var(--fg); cursor: pointer; text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; }
   button:hover { text-decoration-thickness: 2px; }
-  header #refresh { margin-left: auto; font-size: 20px; font-weight: 700; text-transform: none; letter-spacing: 0; }
+  header #status { margin-left: auto; font-size: 14px; color: var(--muted); }
+  header #add { font-size: 16px; font-weight: 700; text-transform: none; letter-spacing: 0; }
+  header #add:disabled, button.login:disabled { color: var(--muted); cursor: default; text-decoration: none; }
+  header #refresh { font-size: 20px; font-weight: 700; text-transform: none; letter-spacing: 0; }
   header #refresh::after { content: " ↗"; }
   header #refresh:disabled { color: var(--muted); cursor: default; text-decoration: none; }
   .days { display: flex; gap: 16px; }
   .days button { color: var(--muted); text-decoration: none; }
   .days button.on { color: var(--fg); text-decoration: underline; }
-  #tokens, main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 60px; padding: 0 40px; max-width: 1432px; margin: 0 auto; }
-  #tokens { padding-top: 6px; }
-  main { padding-bottom: 16px; }
-  @media (max-width: 900px) { #tokens, main { grid-template-columns: 1fr; } }
-  .card, .tokens { background: transparent; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 14px 0 16px; }
-  .card { display: flex; flex-direction: column; gap: 10px; }
-  .card.err .name::after { content: " · error"; color: var(--muted); font-size: 14px; text-transform: uppercase; letter-spacing: .04em; }
-  .top { display: flex; align-items: baseline; gap: 12px; }
+  #tokens { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 60px; padding: 0 40px; max-width: 1432px; margin: 0 auto; }
+  @media (max-width: 900px) { #tokens { grid-template-columns: 1fr; } }
+  .tokens { background: transparent; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 14px 0 16px; }
+  .banner { max-width: 1432px; margin: 0 auto; padding: 10px 40px; font-weight: 700; border-bottom: 1px solid var(--line); }
   .dot { width: 10px; height: 10px; border-radius: 0; flex: none; align-self: center; }
   .dot.claude { background: var(--claude); } .dot.codex { background: var(--codex); }
   .name { font: 500 24px/1.4 var(--sans); letter-spacing: -0.01em; }
-  .plan { color: var(--muted); font-size: 14px; margin-left: auto; text-align: right; text-transform: uppercase; letter-spacing: .04em; }
-  .win { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: baseline; }
-  .win .label { font-size: 16px; color: var(--body); }
-  .win .pct { font-variant-numeric: tabular-nums; font-weight: 500; font-size: 16px; }
-  .bar { grid-column: 1 / -1; height: 6px; margin: 2px 0; background: var(--track); border-radius: 0; overflow: hidden; }
+  /* Section heads: the ledger and token history share one title row style. */
+  #ledger, .sechead.history { max-width: 1432px; margin: 0 auto; padding: 0 40px; }
+  #ledger { padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .sechead { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 24px; padding-top: 14px; }
+  .sechead h2 { font: 500 32px/1.25 var(--sans); letter-spacing: -0.02em; margin: 0; }
+  .sechead .meta { margin-left: auto; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .summary { margin: 2px 0 10px; font-size: 16px; }
+  /* Ledger: one row per account, one column per window. Narrow screens scroll the table sideways. */
+  .scroll { overflow-x: auto; scrollbar-width: thin; }
+  .scroll::-webkit-scrollbar { display: block; height: 6px; }
+  .scroll::-webkit-scrollbar-thumb { background: var(--muted); }
+  table.ledger { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .ledger th { text-align: left; font-weight: 400; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; padding: 6px 24px 6px 0; border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ledger th.acct { width: 25%; } .ledger th.status { width: 19%; }
+  .ledger td { vertical-align: top; padding: 14px 24px 14px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 22%, var(--bg)); }
+  .ledger tr:last-child td { border-bottom: 0; }
+  .ledger .name { font-size: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; margin-top: 2px; }
+  .sub .dot { width: 8px; height: 8px; }
+  .plan { overflow: hidden; text-overflow: ellipsis; }
+  .cell .pct { font-variant-numeric: tabular-nums; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cell .pct.unknown, .cell .pct.none { color: var(--muted); }
+  .bar { height: 6px; margin: 6px 0 4px; background: var(--track); border-radius: 0; overflow: hidden; }
   .bar > i { display: block; height: 100%; border-radius: 0; background: var(--ok); transition: width .4s; }
   .bar.warn > i { background: var(--warn); } .bar.bad > i { background: var(--bad); }
-  .reset { grid-column: 1 / -1; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .notes, .warnings, .error { font-size: 14px; }
-  button.login { margin-top: 6px; font-size: 16px; font-weight: 700; text-transform: none; letter-spacing: 0; }
-  .notes { color: var(--muted); } .warnings { color: var(--warn); } .error { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
-  .top .when { display: flex; gap: 10px; align-self: center; margin-left: 8px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
-  .top .when code { cursor: default; }
-  .stale { color: var(--warn); }
+  .reset { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  /* Stale (failed fetch, proxy down) and disabled rows keep their last numbers with dashed, faded bars and
+     the name and percentages in --muted; a row with no numbers while the proxy is down does the same.
+     Text keeps full opacity: --muted on --bg is 4.97:1, the 4.5:1 floor for text. */
+  tr.dim td.acct .name, tr.dim td.cell .pct { color: var(--muted); }
+  tr.dim .bar { opacity: .5; background: repeating-linear-gradient(90deg, var(--track) 0 6px, transparent 6px 9px); }
+  tr.dim .bar > i { -webkit-mask: repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 9px); mask: repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 9px); }
+  .state { font-size: 18px; color: var(--muted); }
+  .state.live { color: var(--fg); }
+  .status > * + * { margin-top: 4px; }
+  .notes, .warnings, .error, .signin { font-size: 14px; }
+  button.login { font-size: 16px; font-weight: 700; text-transform: none; letter-spacing: 0; }
+  /* Warnings are text, so --muted (4.97:1), not the --warn bar colour (3.47:1). */
+  .notes { color: var(--muted); } .warnings { color: var(--muted); } .error { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
+  .signin { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+  .empty { color: var(--muted); }
+  @media (max-width: 900px) {
+    header, .banner, #ledger, .sechead.history, #tokens { padding-left: 20px; padding-right: 20px; }
+    header { flex-wrap: wrap; row-gap: 4px; }
+  }
   code { font-family: inherit; font-size: inherit; text-transform: none; }
-  .tokens { display: grid; gap: 4px; }
+  /* align-content: a "no transcripts" panel beside a full one would stretch its head row and drop the dot to the middle. */
+  .tokens { display: grid; gap: 4px; align-content: start; }
   .tokens .head { display: flex; align-items: baseline; gap: 12px; }
   .tokens .head .name { font-size: 24px; }
   .tokens .head .dot { margin-right: 4px; }
   .tokens .head .total { font-weight: 500; font-size: 24px; font-variant-numeric: tabular-nums; margin-left: auto; }
+  /* Partial totals while the server is still reading transcripts. */
+  .tokens .head .scanning { margin-left: auto; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .tokens .head .scanning + .total { margin-left: 0; }
   .tokens .row { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
   .tokens .row .hd { font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; width: 72px; flex: none; }
   .stack { display: flex; flex: 1; height: 10px; border-radius: 0; overflow: hidden; background: var(--track); gap: 2px; }
@@ -86,31 +122,27 @@
 <header>
   <h1>Usage</h1>
   <span class="meta" id="meta">loading</span>
-  <span class="days" id="days"><button data-d="7">7d</button><button data-d="30" class="on">30d</button><button data-d="90">90d</button></span>
+  <span id="status"></span>
+  <button id="add" disabled>Add account</button>
   <button id="refresh">Refresh now</button>
 </header>
+<div id="banner" class="banner" role="alert" hidden></div>
+<section id="ledger">
+  <div class="sechead"><h2>Account capacity</h2><span class="meta">percent used · local proxy</span></div>
+  <p class="summary" id="summary"></p>
+  <div class="scroll"><table class="ledger"><thead><tr id="cols"></tr></thead><tbody id="rows"></tbody></table></div>
+</section>
+<div class="sechead history">
+  <h2>Token history</h2>
+  <span class="days" id="days"><button data-d="7">7d</button><button data-d="30" class="on">30d</button><button data-d="90">90d</button></span>
+</div>
 <section id="tokens"></section>
 <div id="tip"></div>
-<main id="main"></main>
-<script>
+<script type="module">
+  import { viewModel, watchForLogin } from "./cards.mjs";
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-  function ago(iso) {
-    if (!iso) return "";
-    const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
-    return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m ago`;
-  }
-  function until(iso) {
-    if (!iso) return "";
-    const s = Math.round((Date.parse(iso) - Date.now()) / 1000);
-    if (s <= 0) return "resets now";
-    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
-    const t = new Date(iso);
-    const clock = d >= 1 ? t.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    return `resets in ${d ? d + "d " : ""}${h}h ${m}m (${clock})`;
-  }
-  function cls(p) { return p >= 90 ? "bad" : p >= 70 ? "warn" : ""; }
   function fmt(n) {
     if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
     if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
@@ -128,9 +160,10 @@
       `<span style="--sw:color-mix(in srgb, var(--hue) ${Math.round(p.alpha * 100)}%, var(--track))">${esc(p.label)}</span>`).join("");
     return { seg, legend };
   }
-  function tokensBlock(t) {
+  // `scanning`: the server is still reading transcripts, so an empty panel may only be not read yet.
+  function tokensBlock(t, scanning) {
     const head = `<div class="head"><span class="dot ${esc(t.kind)}"></span><span class="name">${KIND[t.kind]} tokens, last ${t.days}d</span>`;
-    if (!t.files) return `<div class="tokens" data-kind="${esc(t.kind)}">${head}<span class="total">no transcripts</span></div></div>`;
+    if (!t.files) return `<div class="tokens" data-kind="${esc(t.kind)}">${head}<span class="total">${scanning ? "Scanning transcripts..." : "no transcripts"}</span></div></div>`;
     const max = Math.max(1, ...t.series.map((d) => d.total));
     const day = (d) => new Date(d.day + "T00:00").toLocaleDateString([], { month: "short", day: "numeric" });
     // Each day is a full-height column so the tooltip triggers anywhere above the bar, not only on a 2px sliver.
@@ -147,7 +180,7 @@
     const models = stack(parts, t.total, fmt);
     return `
       <div class="tokens" data-kind="${esc(t.kind)}">
-        ${head}<span class="total">${fmt(t.total)}</span></div>
+        ${head}${scanning ? `<span class="scanning" data-tip="still reading transcripts; totals will grow">scanning...</span>` : ""}<span class="total">${fmt(t.total)}</span></div>
         <div class="row"><span class="hd">split</span><div class="stack">${split.seg}</div></div>
         <div class="legend">${split.legend}</div>
         <div class="row"><span class="hd">models</span><div class="stack">${models.seg}</div></div>
@@ -155,40 +188,45 @@
         <div class="strip">${strip}</div>
         <div class="foot">
           ${t.costUsd ? `<span class="pill" data-tip="same traffic at public API rates, LiteLLM table">${usd(t.costUsd)} API-equivalent</span>` : ""}
-          ${t.unpriced ? `<span class="pill warn" data-tip="no price for these models; add priceAliases in accounts.json">${fmt(t.unpriced)} unpriced</span>` : ""}
+          ${t.unpriced ? `<span class="pill warn" data-tip="no price for these models; add priceAliases in usage/pricing.mjs">${fmt(t.unpriced)} unpriced</span>` : ""}
           <span data-tip="${esc(t.dirs.join(" · "))}">all accounts on this machine</span>
         </div>
       </div>`;
   }
 
-  const path = { basename: (p) => p.split(/[\\/]/).filter(Boolean).pop() ?? "" };
-  function card(a) {
-    const d = a.data;
-    const win = (w) => `
-      <div class="win">
-        <span class="label">${esc(w.label)}</span>
-        <span class="pct">${Math.round(w.usedPercent)}% used</span>
-        <div class="bar ${cls(w.usedPercent)}"><i style="width:${Math.min(100, Math.max(0, w.usedPercent))}%"></i></div>
-        <span class="reset">${esc(until(w.resetsAt))}</span>
-      </div>`;
-    const body = d
-      ? (d.windows.length ? d.windows.map(win).join("") : `<div class="notes">no active rate-limit window</div>`)
-        + (d.notes?.length ? `<div class="notes">${d.notes.map(esc).join("<br>")}</div>` : "")
-        + (d.warnings?.length ? `<div class="warnings">${d.warnings.map(esc).join("<br>")}</div>` : "")
-      : "";
-    const needsLogin = !a.ok && /run `(claude|codex)/.test(a.error ?? "");
-    const err = a.ok ? "" : `<div class="error">${esc(a.error)}${needsLogin ? `<br><button class="login" data-account="${esc(a.name)}">Sign in again</button>` : ""}</div>`;
-    const stale = !a.ok && d ? `<span class="stale">showing data from ${ago(a.lastGoodAt)}</span>` : `<span>${a.ok ? "fetched " + ago(a.fetchedAt) : ""}</span>`;
+  // Sign-in progress per account id ("" = the header's Add account), kept across re-renders.
+  const signins = new Map(); // key -> { text, waiting }
+  const waiting = () => [...signins.values()].some((s) => s.waiting);
+
+  // One ledger row: account, one cell per column, status (state, notes, problems, sign-in).
+  function row(c) {
+    const cell = (x) => x.missing ? `<td class="cell"><div class="pct none">${esc(x.pctText)}</div></td>` : `
+      <td class="cell">
+        <div class="pct${x.pct === null ? " unknown" : ""}">${esc(x.pctText)}</div>
+        <div class="bar ${x.level}"><i style="width:${x.pct === null ? 0 : Math.min(100, Math.max(0, x.pct))}%"></i></div>
+        <div class="reset">${esc(x.resetText)}</div>
+      </td>`;
+    const s = signins.get(c.id);
+    const button = c.signIn && !s?.waiting ? `<button class="login" data-id="${esc(c.id)}"${waiting() ? " disabled" : ""}>Sign in again</button>` : "";
+    const signin = s || button ? `<div class="signin">${button}${s ? `<span class="notes">${esc(s.text)}</span>` : ""}</div>` : "";
+    // A disabled row's notes start with "disabled in proxy", which the state already says.
+    const notes = c.disabled ? [] : c.notes;
+    const status = `<div class="state${c.statusText === "Live" ? " live" : ""}">${esc(c.statusText)}</div>`
+      + (c.hasData && !c.windows.length ? `<div class="notes">no active rate-limit window</div>` : "")
+      + (notes.length ? `<div class="notes">${notes.map(esc).join("<br>")}</div>` : "")
+      + (c.warnings.length ? `<div class="warnings">${c.warnings.map(esc).join("<br>")}</div>` : "")
+      + (c.warning ? `<div class="warnings">${esc(c.warning)}</div>` : "")
+      + (c.error ? `<div class="error">${esc(c.error)}</div>` : "") + signin;
+    const sub = [c.plan, c.meta].filter(Boolean).join(" · ");
     return `
-      <section class="card ${a.ok ? "" : "err"}">
-        <div class="top">
-          <span class="dot ${esc(a.kind)}"></span>
-          <span class="name">${esc(a.name)}</span>
-          <span class="when">${stale}<code data-tip="${esc(a.dir ?? "")}">${esc(path.basename(a.dir ?? ""))}</code></span>
-          <span class="plan">${esc(d?.plan ?? "")}${d?.email ? `<br>${esc(d.email)}` : ""}</span>
-        </div>
-        ${body}${err}
-      </section>`;
+      <tr class="${c.dim ? "dim" : ""}" data-id="${esc(c.id)}">
+        <td class="acct">
+          <div class="name" title="${esc(c.title)}">${esc(c.title)}</div>
+          <div class="sub"><span class="dot ${esc(c.kind)}"></span><span class="plan" title="${esc(sub)}">${esc(sub)}</span></div>
+        </td>
+        ${c.cells.map(cell).join("")}
+        <td class="status">${status}</td>
+      </tr>`;
   }
 
   let last = null, tokens = null, days = 30;
@@ -204,10 +242,20 @@
   }
   function render() {
     if (!last) return;
-    $("#main").innerHTML = last.accounts.map(card).join("");
-    if (tokens) $("#tokens").innerHTML = tokens.providers.map(tokensBlock).join("");
-    const ok = last.accounts.filter((a) => a.ok).length;
-    $("#meta").textContent = `${ok}/${last.accounts.length} accounts live · ${new Date().toLocaleTimeString()}`;
+    const vm = viewModel(last, Date.now());
+    $("#banner").hidden = !vm.banner;
+    $("#banner").textContent = vm.banner ?? "";
+    $("#summary").textContent = vm.summary;
+    // Window columns share the 56% left after account and status; each needs about 240px for its
+    // reset line, so below that width the table scrolls sideways.
+    $(".ledger").style.minWidth = `${Math.round(240 * vm.columns.length / 0.56)}px`;
+    $("#cols").innerHTML = `<th class="acct">Account</th>${vm.columns.map((l) => `<th title="${esc(l)}">${esc(l)}</th>`).join("")}<th class="status">Status</th>`;
+    $("#rows").innerHTML = vm.cards.map(row).join("") || `<tr><td class="empty" colspan="${vm.columns.length + 2}">${esc(vm.emptyText)}</td></tr>`;
+    const add = signins.get("");
+    $("#status").textContent = add?.text ?? "";
+    $("#add").disabled = waiting() || !last.proxy?.ok;
+    if (tokens) $("#tokens").innerHTML = tokens.providers.map((t) => tokensBlock(t, tokens.scanning)).join("");
+    $("#meta").textContent = `${vm.metaText} · ${new Date().toLocaleTimeString()}`;
   }
   const tip = $("#tip");
   document.addEventListener("pointerover", (e) => {
@@ -237,18 +285,39 @@
     for (const x of $("#days").children) x.classList.toggle("on", x === b);
     load();
   });
-  document.addEventListener("click", async (e) => {
+  // Sign-in happens in the proxy's own panel; the page then refreshes every 5 s for up to 10 min
+  // until the new login, or the one being signed in again, fetches fine.
+  async function signIn(key, targetId) {
+    if (!last?.proxy?.panelUrl || waiting()) return;
+    const knownIds = last.accounts.map((a) => a.id);
+    window.open(last.proxy.panelUrl, "_blank", "noopener");
+    signins.set(key, { text: "Waiting for sign-in...", waiting: true });
+    render();
+    const poll = async () => {
+      await fetch("/api/refresh", { method: "POST", headers: { "X-Usage-Request": "1" } });
+      last = await (await fetch("/api/usage", { cache: "no-store" })).json();
+      render();
+      return last;
+    };
+    const r = await watchForLogin({ poll, knownIds, targetId, intervalMs: 5000, timeoutMs: 600000 });
+    await load();
+    signins.delete(key);
+    // The row can be gone by now (the login was removed in the proxy); report in the header then.
+    const where = key && last.accounts.some((a) => a.id === key) ? key : "";
+    signins.set(where, { text: r.found ? `Signed in as ${r.account.email || r.account.label || r.account.id}` : "No new sign-in seen; try again", waiting: false });
+    render();
+  }
+  document.addEventListener("click", (e) => {
     const b = e.target.closest("button.login"); if (!b) return;
-    b.disabled = true;
-    const r = await fetch(`/api/login?account=${encodeURIComponent(b.dataset.account)}`, { method: "POST", headers: { "X-Usage-Request": "1" } });
-    b.replaceWith(Object.assign(document.createElement("span"), { className: "notes", textContent: r.ok ? "A console window opened. Finish the browser sign-in there, then press Refresh now." : `Could not open the sign-in window (${r.status}).` }));
+    signIn(b.dataset.id, b.dataset.id);
   });
+  $("#add").addEventListener("click", () => signIn("", null));
   $("#refresh").addEventListener("click", async () => {
     $("#refresh").disabled = true;
     try { await fetch("/api/refresh", { method: "POST", headers: { "X-Usage-Request": "1" } }); await load(); } finally { $("#refresh").disabled = false; }
   });
   // A page load acts like "Refresh now": show the cached snapshot at once, then pull fresh numbers.
-  // The server skips accounts fetched within the last few minutes, so reloads cannot trip the 429 backoff.
+  // A 429 parks that login on the server for its Retry-After time, so reloads cannot hammer the usage API.
   load().then(() => fetch("/api/refresh", { method: "POST", headers: { "X-Usage-Request": "1" } })).then(load).catch(() => {});
   setInterval(load, 30_000);
   setInterval(render, 15_000); // keep countdowns moving between fetches

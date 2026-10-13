@@ -93,6 +93,53 @@ const LAYOUT = {
   codex: { sub: "sessions", parse: (line, s) => parseCodexLine(line, s), init: codexInit, gates: ['"token_count"', '"turn_context"', '"session_meta"'] },
 };
 
+// Transcript dirs to scan: the CLI's own config dir (CLAUDE_CONFIG_DIR / CODEX_HOME, else ~/.claude /
+// ~/.codex) plus every ~/.claude-<n> or ~/.codex-<n> left from per-account config dirs. The CLI's own
+// dir is kept even before it exists: scanning a missing dir finds nothing, and the first scan after the
+// CLI creates it counts it.
+export async function transcriptDirs(env = process.env) {
+  const home = env.USERPROFILE ?? env.HOME ?? "";
+  let names = [];
+  try { names = await readdir(home); } catch { /* no home */ }
+  const out = [];
+  for (const [kind, envName, base] of [["claude", "CLAUDE_CONFIG_DIR", ".claude"], ["codex", "CODEX_HOME", ".codex"]]) {
+    const dirs = [env[envName] ? path.resolve(env[envName]) : path.join(home, base)];
+    for (const n of names.filter((n) => new RegExp(`^\\${base}-\\d+$`).test(n)).sort()) dirs.push(path.join(home, n));
+    const seen = new Set();
+    for (const dir of dirs) {
+      if (seen.has(dir.toLowerCase())) continue;
+      seen.add(dir.toLowerCase());
+      if (dir === dirs[0] || (await stat(dir).catch(() => null))?.isDirectory()) out.push({ kind, dir });
+    }
+  }
+  return out;
+}
+
+// Cache file name for one transcript dir. Lossy (every run of other characters becomes "_"), so
+// the cache also stores its kind and dir.
+export const cacheName = (kind, dir) => `${kind}-${dir.replace(/[^\w.-]+/g, "_")}.json`;
+
+// The { kind, dir } a saved cache belongs to, or null when it holds nothing this version reads.
+// Caches written before kind and dir were stored carry them only in their transcript paths
+// (<dir>/projects/... or <dir>/sessions/...); of the possible cut points, the one whose dir gives
+// back this file's name wins.
+export async function cacheOwner(cacheFile) {
+  let c;
+  try { c = JSON.parse(await readFile(cacheFile, "utf8")); } catch { return null; }
+  if (c?.version !== CACHE_VERSION || !c.files || typeof c.files !== "object") return null;
+  if (LAYOUT[c.kind] && typeof c.dir === "string" && c.dir) return { kind: c.kind, dir: c.dir };
+  const name = path.basename(cacheFile);
+  const found = [];
+  for (const [kind, { sub }] of Object.entries(LAYOUT)) {
+    if (!name.startsWith(`${kind}-`)) continue;
+    for (const p of Object.keys(c.files)) {
+      const re = new RegExp(`[\\\\/]${sub}[\\\\/]`, "g");
+      for (let m; (m = re.exec(p));) found.push({ kind, dir: p.slice(0, m.index) });
+    }
+  }
+  return found.find((o) => cacheName(o.kind, o.dir) === name) ?? found[0] ?? null;
+}
+
 async function listJsonl(root) {
   let names;
   try { names = await readdir(root, { recursive: true }); } catch { return []; }
@@ -146,7 +193,7 @@ export class TokenScanner {
 
   async save() {
     const files = Object.fromEntries(this.files);
-    await this.writeAtomic(this.cacheFile, JSON.stringify({ version: CACHE_VERSION, files }));
+    await this.writeAtomic(this.cacheFile, JSON.stringify({ version: CACHE_VERSION, kind: this.acct.kind, dir: this.acct.dir, files }));
   }
 
   scan() {
