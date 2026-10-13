@@ -4,10 +4,10 @@
 <source media="(max-width: 500px) and (prefers-color-scheme: dark)" srcset="assets/readme/masthead-narrow-dark.svg">
 <source media="(max-width: 500px)" srcset="assets/readme/masthead-narrow-light.svg">
 <source media="(prefers-color-scheme: dark)" srcset="assets/readme/masthead-dark.svg">
-<img alt="Harness Console: one local app for Harness Firmware repositories, with a usage tracker for every Claude Code and Codex account on this machine. The app runs on port 43127, the tracker on port 4545. The tracker reads 4 Claude windows and 2 Codex windows at startup, on every page load and on Refresh now, with the poll timers off in the shipped config, rescans token totals every 300 seconds, and makes one write: the Claude token refresh." src="assets/readme/masthead-light.svg" width="100%">
+<img alt="Harness Console: one local app for Harness Firmware repositories, with a usage tracker for every Claude Code and Codex login in CLIProxyAPI. The app runs on port 43127, the tracker on port 4545. The tracker reads 4 Claude windows and 2 Codex windows through the proxy at startup, on every page load and on Refresh now, and rescans token totals every 300 seconds. It writes no credentials and refreshes no tokens." src="assets/readme/masthead-light.svg" width="100%">
 </picture>
 
-Harness Console is one local app for working with Harness Firmware repositories on Windows, with a usage tracker built in. It clones and updates your GitHub repositories, creates new projects from the Harness-Firmware template, brings template skill changes into Harness clones you already have, installs Harness skills into DSH, and shows rate-limit and token usage for every Claude Code and Codex account on the machine. Both servers listen on 127.0.0.1 only. Node only, no dependencies.
+Harness Console is one local app for working with Harness Firmware repositories on Windows, with a usage tracker built in. It clones and updates your GitHub repositories, creates new projects from the Harness-Firmware template, brings template skill changes into Harness clones you already have, installs Harness skills into DSH, and shows rate-limit and token usage for every Claude Code and Codex login held by [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). Both servers listen on 127.0.0.1 only. Node only, no dependencies.
 
 This repository was formerly UsageTracker; the tracker now lives in `usage/`.
 
@@ -77,11 +77,11 @@ Installs skills from the Harness-Firmware clone at `~/CoreWise/Harness-Firmware`
 - The workspace folder (`~/CoreWise/` for an existing install): repository clones, including the Harness-Firmware clone the DSH tab reads.
 - `~/.corewise-cloner/harness-firmware.git`: the template cache for Skill sync.
 - `~/.corewise-cloner/dsh-installs.json` and `dsh-backups/`: what the DSH tab installed, and the copies it replaced.
-- `usage/.state/`: the tracker's snapshots, token cache and price table.
+- `usage/.state/`: the tracker's snapshot cache (`usage-cache.json`), token cache and price table.
 
 The `CoreWise` and `.corewise-cloner` names come from the app's earlier name and are kept so existing clones and state carry over. GitHub credentials stay with the GitHub CLI.
 
-The app accepts requests only for its exact loopback host and browser origin, and every change needs a per-session token. Clone URLs are built from repository identities the GitHub API returned; the browser cannot supply a URL or a command. Git and `gh` run with argument arrays and no shell. The tracker answers only `127.0.0.1` or `localhost` on its own port, and its two changes, **Refresh now** and **Sign in again**, need a same-origin request with a custom header, so another website cannot trigger them.
+The app accepts requests only for its exact loopback host and browser origin, and every change needs a per-session token. Clone URLs are built from repository identities the GitHub API returned; the browser cannot supply a URL or a command. Git and `gh` run with argument arrays and no shell. The tracker answers only `127.0.0.1` or `localhost` on its own port. Its one change, `POST /api/refresh` (sent by **Refresh now**, a page load and the sign-in watch), needs a same-origin request with a custom header, so another website cannot trigger it. **Sign in again** and **Add account** only open CLIProxyAPI's own sign-in page; the tracker server has no sign-in route.
 
 ## Tests
 
@@ -97,7 +97,18 @@ node server.mjs --port 43128 --root "C:\path\to\test-clones" --settings "C:\path
 
 ## Usage tracker
 
-The tracker in `usage/` serves one local page for every Claude Code and Codex account on the machine: how much of each rate-limit window is used, when it resets, and the tokens each provider burned over the last 7, 30 or 90 days. It reads the credential files the CLIs write on login and the transcripts they leave on disk. The one write is the Claude token refresh. 5 source files, no dependencies.
+The tracker in `usage/` serves one local page for every Claude Code and Codex login held by CLIProxyAPI: how much of each rate-limit window is used, when it resets, and the tokens each provider used over the last 7, 30 or 90 days. CLIProxyAPI is required. It holds the logins and their tokens and makes each usage call for the tracker; the token totals come from the transcripts the CLIs leave on this machine. 7 source files, no dependencies.
+
+### Setup
+
+Install and sign in to [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI); the tracker finds it. Sign each Claude and Codex account in through the proxy, either in its own panel or with **Add account** on the tracker page. The tracker has no settings file and no account list of its own: every login the proxy lists appears on the page.
+
+The tracker reads two files from `%LOCALAPPDATA%\CLIProxyAPI` (the `USAGE_PROXY_DIR` environment variable points it at another folder):
+
+- `config.yaml`: only the top-level `host` and `port` lines. Without them the proxy is expected at 127.0.0.1:8317; a host that is not a loopback address still means 127.0.0.1.
+- `dashboard-key.txt`: the management key, sent as a bearer token to the proxy's management API.
+
+Both are read again on every call, so a proxy restart or a new key needs no tracker restart. When the key file is missing or the proxy does not answer, a banner says so and the page keeps showing the last saved numbers.
 
 ### Run the tracker alone
 
@@ -107,70 +118,72 @@ The launcher starts it. To run it without the app:
 node usage/server.mjs
 ```
 
-Open http://127.0.0.1:4545. The page rereads the tracker's cached snapshot every 30 seconds and the reset countdowns tick every 15; "Refresh now" and every page load poll each account and rescan transcripts at once.
+Open http://127.0.0.1:4545. The page rereads the tracker's snapshot every 30 seconds and the reset countdowns tick every 15; every page load and "Refresh now" ask the tracker to poll the proxy again and start a transcript rescan.
 
-### Accounts
+### What it reads and writes
 
-`usage/accounts.json` lists one entry per account:
+The tracker reads the proxy's login list, the usage of each login through the proxy, the transcripts on this machine, and LiteLLM's public price table. It writes only inside `usage/.state/` (`USAGE_STATE_DIR` moves it):
 
-```json
-{ "name": "Claude 2", "kind": "claude", "dir": "~/.claude-2" }
-```
+- `usage-cache.json`: the last good snapshot of every login, so the page has numbers right after a restart or while the proxy is down. A login the proxy no longer lists is dropped from the page and from this file.
+- `tokens/`: parsed transcript records.
+- `pricing.json`: the price table.
 
-- `kind: "claude"` reads `<dir>/.credentials.json`, the file Claude Code writes on login.
-- `kind: "codex"` reads `<dir>/auth.json`, the file Codex writes on login.
+On its first start after an upgrade it moves state an older version left in the repository root's `.state/` into `usage/.state/`, and deletes the per-account snapshot files older versions wrote there.
 
-Each account needs its own directory so its credentials survive a login elsewhere. The first account of each kind uses the default directory (`~/.claude`, `~/.codex`). Log a second account into a separate directory once:
-
-```bash
-$env:CLAUDE_CONFIG_DIR = "$HOME\.claude-2"; claude login
-```
-
-```bash
-$env:CODEX_HOME = "$HOME\.codex-2"; codex login
-```
-
-The tracker never switches accounts; it only reads.
+It never reads or writes a CLI credential file and never refreshes a token; CLIProxyAPI owns the logins and their refresh. Each vendor call goes out as `POST /v0/management/api-call`, naming the login and one of three fixed upstream URLs, with the header `Authorization: Bearer $TOKEN$`. The proxy puts that login's token in place of `$TOKEN$` and makes the call.
 
 ### What it shows
 
+The page opens with a ledger, one row per proxy login, titled by its email. Columns are Session (5h) and Weekly, then any other window a login reports, then Status. Each cell shows the percentage used, a bar and the reset time; bars darken as they fill: tan under 70% used, brown from 70% and near-black from 90%. A line above the table gives the Codex weekly room left and names one Claude login: the first to reset among those at 90% weekly or more, else the next to reset.
+
 | Provider | Windows | Extras |
 |---|---|---|
-| Claude Code | Session (5h), Weekly, Weekly Opus, Weekly Sonnet (the last two when the plan reports them) | plan tier and email; extra-usage credits when enabled |
-| Codex | Session and Weekly, whichever the API reports as active | plan and email; credit balance; banked rate-limit resets with their expiry dates |
+| Claude Code | Session (5h), Weekly, Weekly Opus, Weekly Sonnet (the last two when the plan reports them), plus any model-scoped cap the API lists in `limits`, labelled Weekly or Session and the model name | plan tier; extra-usage credits when enabled |
+| Codex | the windows the API reports as active, labelled by length (Session (5h), Weekly) | plan; credit balance; number of banked rate-limit resets |
 
-Bars turn amber at 70% used and red at 90%. A card with a red border shows the last error; if an earlier fetch succeeded, the old numbers stay visible with their age.
+The Status column reads the first of these that applies:
+
+- **Disabled in proxy**: the login is disabled in CLIProxyAPI. The tracker does not fetch it and keeps any numbers it had.
+- **As of** and an age: the row has earlier numbers but the last fetch failed, the proxy is down, or the tracker has just started from its saved snapshot. This holds even when the proxy flags the login. The row keeps the last numbers it had, each shown as "Last: N%", with the error under them, or in the banner when the proxy is down.
+- **Sign-in needed**: the proxy flags the login or marks it unavailable, or the fetch failed with no earlier numbers to show.
+- **Live**: the last fetch worked, and the proxy neither flags the login nor marks it unavailable.
+
+A window whose reset time has passed shows its last number as "Last: N%" and "current reset unknown" until the next fetch. Two proxy logins for the same account both appear, each warned "Same account as another login in the proxy."
+
+### Signing in
+
+When a login needs attention (the proxy flags it, marks it unavailable, or its usage call fails for any reason but a rate limit) and the proxy is running, its row shows **Sign in again**. That button and **Add account** in the header open the proxy's sign-in page, `/management.html#/oauth` on the proxy's address, in a new tab. Sign in there. The tracker page then refreshes every 5 seconds for up to 10 minutes until a new login, or the one being signed in again, fetches fine, and reports "Signed in as" and the email, or "No new sign-in seen; try again". One watch runs at a time, and **Add account** stays off while the proxy is down.
+
+### Polling
+
+- There is no poll timer. Each login is fetched at startup, on every page load, on **Refresh now** and every 5 seconds during a sign-in watch. Refreshes that arrive while a poll runs share it.
+- A login that fetched fine less than 60 seconds ago, and that the proxy does not flag, keeps its numbers instead of being fetched again, so a sign-in watch does not refetch every account every 5 seconds.
+- A 429 from a usage API parks that login for the response's Retry-After time, or 5 minutes without one.
+- The Claude plan comes from the profile endpoint, fetched after a login's usage call succeeds and then kept for as long as the tracker runs. A failed profile fetch is not kept, so the login's next successful usage fetch asks again.
+- Transcripts are rescanned every 300 seconds and on every refresh. One scan runs at a time, and a refresh does not wait for it; while it runs, the token panels say "scanning...".
 
 ### Token totals
 
-Neither provider reports token counts over an API, so the tracker reads the transcripts the CLIs write on this machine: `<dir>/projects/**/*.jsonl` for Claude Code, `<dir>/sessions/**/*.jsonl` for Codex. Transcripts carry no account identifier, and logging out and back in with another email puts both accounts' sessions in the same directory, so totals are shown per provider, combined across accounts. Sessions run on other machines are not counted.
+Neither provider reports token counts over an API, so the tracker reads the transcripts the CLIs write on this machine: `<dir>/projects/**/*.jsonl` for Claude Code, `<dir>/sessions/**/*.jsonl` for Codex. It scans each CLI's own folder (`CLAUDE_CONFIG_DIR` or `~/.claude`, `CODEX_HOME` or `~/.codex`) plus any numbered `~/.claude-<n>` or `~/.codex-<n>` folder left from earlier per-account setups. Transcripts carry no account identifier, and logging out and back in with another email puts both accounts' sessions in the same folder, so totals are shown per provider, combined across accounts. Sessions run on other machines are not counted.
 
-Each provider panel shows the total, split into uncached input, cache reads, cache writes and output, with the top three models and a bar per day. Under it sits an API-equivalent dollar figure, which prices the same traffic at public API rates from [LiteLLM's table](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), fetched once a day and cached in `usage/.state/pricing.json`. It is not a subscription bill. Models missing from the table show as unpriced unless `priceAliases` in `usage/accounts.json` maps them to a priced model, for example `"codex-auto-review": "gpt-5.6-sol"` for Codex's internal reviewer.
+Each provider panel shows the total, split into uncached input, cache reads, cache writes and output, with the top three models and a bar per day. Under it sits an API-equivalent dollar figure, which prices the same traffic at public API rates from [LiteLLM's table](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json); it is not a subscription bill. The table is cached in `usage/.state/pricing.json`. Each transcript scan fetches the table again once the cached copy is 24 hours old. A failed fetch keeps the old table and its age, so the next scan (on the 300-second timer or a refresh) tries again; only successful fetches are 24 hours apart. Models missing from the table show as unpriced unless the alias table in `usage/pricing.mjs` maps them to a priced model, for example `"codex-auto-review": "gpt-5.6-sol"` for Codex's internal reviewer.
 
 Parsing follows [T3 Code](https://github.com/pingdotgg/t3code) (MIT) and ccusage: Claude lines are deduplicated by message id and request id (one message spans several transcript lines), Codex totals sum `last_token_usage` deltas with re-emitted duplicates dropped, and the parent history copied into a forked Codex rollout is skipped.
 
-Parsed records are cached per file in `usage/.state/tokens/`, keyed by size and mtime, so a rescan (every 300 seconds, `tokenScanSeconds` in `usage/accounts.json`) reads only files that changed, and a grown file only from where the last read stopped. Records are kept 400 days after the CLI deletes the transcript, so history outlives Claude Code's `cleanupPeriodDays` (default 30; raise it in `settings.json` so the first scan can backfill further).
-
-### Tokens and polling
-
-- Claude access tokens expire after a few hours. When one is expired, the tracker refreshes it with the stored refresh token (same endpoint and client id the CLI uses) and writes the new token back to that account's `.credentials.json`, atomically. This is the only write the tracker performs. If the refresh token itself is rejected, the card says to run `claude` in that directory.
-- Codex access tokens last about ten days and the CLI refreshes them on use. The tracker never refreshes Codex tokens; it warns 24 hours before expiry.
-- The shipped `usage/accounts.json` sets `claudePollSeconds` to 0, so the Claude timer is off: each Claude account is fetched once at startup, then on every page load and on "Refresh now". A nonzero value polls on a timer at that many seconds; with the key removed the server uses 180 seconds (the usage endpoint rate-limits faster polling).
-- The shipped `usage/accounts.json` sets `codexPollSeconds` to 0, so the Codex timer is off: each Codex account is fetched once at startup, then on every page load and on "Refresh now". A nonzero value polls on a timer at that many seconds; with the key removed the server uses 60 seconds.
-- Every refresh and page load polls upstream; set `claudeMinRefreshSeconds` or `codexMinRefreshSeconds` to skip accounts fetched more recently than that. A 429 from either usage API parks that account for five minutes. When a Claude or Codex login has lapsed, the card shows **Sign in again**, which opens a console window running the CLI login for that config dir. The last good snapshot per account is cached in `usage/.state/` so the page shows data right after a restart.
+Parsed records are cached per file in `usage/.state/tokens/`, keyed by size and mtime, so a rescan reads only files that changed, and a grown file only from where the last read stopped. Records are kept 400 days from their timestamp, even after the CLI deletes the transcript, so history outlives Claude Code's `cleanupPeriodDays` (default 30; raise it in `settings.json` so the first scan can backfill further). A first scan of a large history takes minutes.
 
 ### Endpoints used
 
 | Call | Purpose |
 |---|---|
-| `GET api.anthropic.com/api/oauth/usage` | Claude windows |
-| `GET api.anthropic.com/api/oauth/profile` | Claude email |
-| `POST platform.claude.com/v1/oauth/token` | Claude token refresh |
-| `GET chatgpt.com/backend-api/wham/usage` | Codex windows, plan, credits |
-| `GET chatgpt.com/backend-api/wham/rate-limit-reset-credits` | Codex banked resets |
-| `GET raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json` | model prices (LiteLLM) |
+| `GET 127.0.0.1:8317/v0/management/auth-files` | list the proxy's logins |
+| `POST 127.0.0.1:8317/v0/management/api-call` | one upstream call below, made by the proxy with the login's token |
+| `GET api.anthropic.com/api/oauth/usage` | Claude windows, extra usage, through the proxy |
+| `GET api.anthropic.com/api/oauth/profile` | Claude plan (once per login; retried after a failure), through the proxy |
+| `GET chatgpt.com/backend-api/wham/usage` | Codex windows, plan, credits, banked resets, through the proxy |
+| `GET raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json` | model prices (LiteLLM): after a successful fetch, not again for 24 hours; after a failure, on the next transcript scan |
 
-The vendor calls are not documented public APIs. They are the same calls the CLIs and [CodexBar](https://github.com/steipete/CodexBar) make; request shapes were taken from [Win-CodexBar](https://github.com/nesszer/Win-CodexBar) (MIT), and either vendor can change them without notice.
+The tracker calls the proxy on loopback, the proxy makes the three vendor calls, and the price table is the only request the tracker sends to the internet itself. The vendor calls are not documented public APIs. They are the same calls the CLIs and [CodexBar](https://github.com/steipete/CodexBar) make; request shapes were taken from [Win-CodexBar](https://github.com/nesszer/Win-CodexBar) (MIT), and either vendor can change them without notice.
 
 ## README
 

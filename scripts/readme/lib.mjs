@@ -6,17 +6,17 @@ import { ROOT } from "./facts.mjs";
 // for every functional string, ash hairlines, pill containers. The light
 // theme is the reference; the dark variant keeps the same roles on off-black
 // so the panel still reads as one card on GitHub's dark page.
-// The status trio is the dashboard's own bar palette and means utilization
-// only (see the contract in panels.mjs). Provider hues match the dashboard.
+// The bar legend takes the dashboard's own bar colours from facts.mjs
+// (usage/index.html has no dark mode), so they are not themed here.
 export const THEMES = Object.freeze({
   light: {
     canvas: "#f6f3f1", ink: "#242424", body: "#4e4d4d", mute: "#797776", rule: "#cecac8", track: "#e6e1dd", face: "#cfdaf5",
-    ok: "#2f9e5f", warn: "#d9932c", bad: "#d64545", claude: "#c96a3a", codex: "#2b59d1",
+    claude: "#c96a3a", codex: "#2b59d1",
     wash1: "#ff9473", wash2: "#a0b5eb",
   },
   dark: {
     canvas: "#242424", ink: "#f6f3f1", body: "#d9d4d0", mute: "#a29e9b", rule: "#4e4d4d", track: "#3a3938", face: "#3b4a6b",
-    ok: "#3fb950", warn: "#d29922", bad: "#f85149", claude: "#e0824f", codex: "#7d9df0",
+    claude: "#e0824f", codex: "#7d9df0",
     wash1: "#ff9473", wash2: "#a0b5eb",
   },
 });

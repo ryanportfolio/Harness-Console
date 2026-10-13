@@ -15,7 +15,7 @@ const asset = (n) => fs.readFileSync(path.join(ROOT, "assets", "readme", n), "ut
 
 // Numbers each panel must carry, in every variant.
 const NEED = {
-  masthead: [F.claudePoll.label, F.codexPoll.label, ...(F.claudePoll.on && F.codexPoll.on ? [] : ["poll timer off"]), `${F.tokenScanSeconds} s`, `${F.warnAt}%`, `${F.badAt}%`, `:${F.port}`, `:${F.appPort}`, "Harness Console", ...F.claudeWindows],
+  masthead: ["on load", "no poll timer", "CLIProxyAPI", `${F.refetchHealthySeconds} s`, `${F.watchIntervalSeconds} s`, `${F.tokenScanSeconds} s`, `${F.warnAt}%`, `${F.badAt}%`, `fill="${F.barColors.ok}"`, `fill="${F.barColors.warn}"`, `fill="${F.barColors.bad}"`, "not flagged by the proxy", `:${F.port}`, `:${F.appPort}`, "Harness Console", ...F.claudeWindows],
 };
 for (const [name, needs] of Object.entries(NEED)) {
   for (const v of ["light", "dark", "narrow-light", "narrow-dark"]) {
@@ -46,13 +46,14 @@ if (!md.split("\n").some((l) => l.startsWith("Harness Console is "))) fail("READ
 if (!section("Run").includes("node launcher.mjs")) fail("README: run section missing node launcher.mjs");
 if (!section("Usage tracker").includes("node usage/server.mjs")) fail("README: usage tracker section missing node usage/server.mjs");
 for (const tab of F.tabs) if (!section("App tabs").includes(`### ${tab}\n`)) fail(`README: app tab ${tab} has no section`);
-// Poll claims match the shipped config: a timer that is off must not be described as polling.
-const polling = section("Usage tracker");
-for (const [p, name] of [[F.claudePoll, "Claude"], [F.codexPoll, "Codex"]]) {
-  if (p.on && !polling.includes(`${name} is polled every ${p.seconds} seconds`)) fail(`README: ${name} poll interval ${p.seconds} s not stated`);
-  if (!p.on && !polling.includes(`so the ${name} timer is off`)) fail(`README: ${name} poll timer off not stated`);
-  if (!p.on && new RegExp(`${name}[^.]*(?:polled|polls) every`).test(md)) fail(`README: ${name} described as polling on a timer`);
-}
+// The tracker has no poll timer and needs CLIProxyAPI; the README must say both and never describe a timer.
+const tracker = section("Usage tracker");
+if (!tracker.includes("There is no poll timer.")) fail("README: usage tracker section does not say there is no poll timer");
+if (/(?:polled|polls) every/.test(md)) fail("README: usage described as polling on a timer");
+if (!tracker.includes(`less than ${F.refetchHealthySeconds} seconds ago`)) fail(`README: ${F.refetchHealthySeconds} s healthy-login skip not stated`);
+for (const k of ["ok", "warn", "bad"]) if (!tracker.includes(F.barColorNames[k])) fail(`README: bar colour ${F.barColorNames[k]} (--${k}) not named`);
+if (/\b(?:amber|green|red)\b/i.test(tracker)) fail("README: usage tracker names a bar colour the page does not use");
+if (!tracker.includes("CLIProxyAPI is required."))fail("README: CLIProxyAPI requirement not stated");
 if (!md.includes("(LICENSE)")) fail("README: license link missing");
 for (const m of md.matchAll(/(?:src|srcset)="(assets\/[^"]+)"/g)) if (!fs.existsSync(path.join(ROOT, m[1]))) fail(`README: missing asset ${m[1]}`);
 for (const e of F.endpoints) if (!md.includes(`${e.method} ${e.host}${e.path}`)) fail(`README: endpoint ${e.path} not listed`);

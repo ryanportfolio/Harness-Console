@@ -93,6 +93,26 @@ const LAYOUT = {
   codex: { sub: "sessions", parse: (line, s) => parseCodexLine(line, s), init: codexInit, gates: ['"token_count"', '"turn_context"', '"session_meta"'] },
 };
 
+// Transcript dirs to scan: the CLI's own config dir (CLAUDE_CONFIG_DIR / CODEX_HOME, else ~/.claude /
+// ~/.codex) plus every ~/.claude-<n> or ~/.codex-<n> left from per-account config dirs.
+export async function transcriptDirs(env = process.env) {
+  const home = env.USERPROFILE ?? env.HOME ?? "";
+  let names = [];
+  try { names = await readdir(home); } catch { /* no home */ }
+  const out = [];
+  for (const [kind, envName, base] of [["claude", "CLAUDE_CONFIG_DIR", ".claude"], ["codex", "CODEX_HOME", ".codex"]]) {
+    const dirs = [env[envName] ? path.resolve(env[envName]) : path.join(home, base)];
+    for (const n of names.filter((n) => new RegExp(`^\\${base}-\\d+$`).test(n)).sort()) dirs.push(path.join(home, n));
+    const seen = new Set();
+    for (const dir of dirs) {
+      if (seen.has(dir.toLowerCase())) continue;
+      seen.add(dir.toLowerCase());
+      if ((await stat(dir).catch(() => null))?.isDirectory()) out.push({ kind, dir });
+    }
+  }
+  return out;
+}
+
 async function listJsonl(root) {
   let names;
   try { names = await readdir(root, { recursive: true }); } catch { return []; }

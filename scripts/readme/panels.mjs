@@ -2,8 +2,8 @@
 // whole app; the board below it shows the usage tracker's clocks.
 //
 // Conceit: a departures board. Everything the tracker reports is a clock:
-// rate-limit windows and their reset times, poll cadence, token expiry,
-// transcript retention. So the masthead is a schedule board, one row per
+// rate-limit windows and their reset times, fetch cadence, the sign-in
+// watch, transcript rescans. So the masthead is a schedule board, one row per
 // clock, each with a ring clock that drains as its window would.
 //
 // Style: the Monad reference. One parchment card with a 40px radius and a
@@ -15,7 +15,9 @@
 // - Type: SERIF for the title only, at weight 400. Everything else MONO.
 //   Tabular figures always. No bold anywhere.
 // - Colour: ink, body, mute, rule, track on the card. The ok/warn/bad trio
-//   means dashboard utilization thresholds and appears only in the legend.
+//   is the dashboard's own bar colours (F.barColors, read from
+//   usage/index.html), means utilization thresholds and appears only in the
+//   legend.
 //   Provider hues mark provider rows and nothing else. The coral-to-sky
 //   wash is decorative, appears once, behind the title, and carries no data.
 // - Motion: one looping animation, the ring clocks draining at one second
@@ -57,19 +59,20 @@ function css(t) {
 @media (prefers-reduced-motion:reduce){*{animation:none!important}.hand{stroke-dashoffset:0}}`;
 }
 
-// Alt-text wording for one provider's poll schedule.
-const pollPhrase = (p) => p.on ? `polled every ${p.seconds} seconds` : "fetched at startup, on page load and on Refresh now (poll timer off)";
+// Upstream windows have no poll timer: the tracker fetches them on load (see the legend line).
+const ON_LOAD = "on load";
 
 function boardRows() {
   const rows = [];
-  rows.push({ group: "Claude Code", color: "claude", host: F.endpoints[0].host });
-  for (const w of F.claudeWindows) rows.push({ label: w, hours: [windowHours(w)], poll: F.claudePoll.label, source: F.endpoints[0].path, note: w.startsWith("Weekly ") ? "when the plan reports it" : "" });
-  rows.push({ group: "Codex", color: "codex", host: F.endpoints[3].host });
-  rows.push({ label: "Session (5h)", hours: [5], poll: F.codexPoll.label, source: F.endpoints[3].path, note: "" });
-  rows.push({ label: "Weekly", hours: [7 * 24], poll: F.codexPoll.label, source: F.endpoints[3].path, note: "" });
+  rows.push({ group: "Claude Code", color: "claude", host: F.claudeHost });
+  for (const w of F.claudeWindows) rows.push({ label: w, hours: [windowHours(w)], poll: ON_LOAD, source: F.claudeUsagePath, note: w.startsWith("Weekly ") ? "when the plan reports it" : "" });
+  rows.push({ group: "Codex", color: "codex", host: F.codexHost });
+  rows.push({ label: "Session (5h)", hours: [5], poll: ON_LOAD, source: F.codexUsagePath, note: "" });
+  rows.push({ label: "Weekly", hours: [7 * 24], poll: ON_LOAD, source: F.codexUsagePath, note: "" });
   rows.push({ group: "Tokens", color: null, host: "local transcripts" });
   rows.push({ label: "Last 7 / 30 / 90 d", hours: [7 * 24, 30 * 24, 90 * 24], poll: `${F.tokenScanSeconds} s`, source: "usage/.state/tokens/", note: "" });
-  rows.push({ label: "Claude token refresh", hours: [], poll: "on expiry", source: F.endpoints[2].path, note: "the only write" });
+  rows.push({ group: "CLIProxyAPI", color: null, host: `${F.proxy.host}:${F.proxy.port}` });
+  rows.push({ label: "Sign-in watch", hours: [], poll: `${F.watchIntervalSeconds} s`, source: F.proxy.panelPath.split("#")[0], note: `up to ${F.watchTimeoutMinutes} min` });
   return rows;
 }
 
@@ -95,7 +98,7 @@ function masthead(t, narrow) {
   if (serifWidth(title, narrow ? 36 : 48) > W - 2 * px) throw new Error(`panels: title "${title}" overflows the ${narrow ? "narrow" : "wide"} masthead`);
   body.push(`<text x="${px}" y="${y}" class="ttl" font-size="${narrow ? 36 : 48}">${title}</text>`);
   y += narrow ? 30 : 36;
-  const sub = "One local app for Harness Firmware repositories, plus a usage tracker: rate-limit windows, reset clocks and token totals for every Claude Code and Codex account on this machine.";
+  const sub = "One local app for Harness Firmware repositories, plus a usage tracker: rate-limit windows and reset clocks for every Claude Code and Codex login in CLIProxyAPI, and token totals from this machine's transcripts.";
   const subSize = narrow ? 13 : 16;
   for (const line of wrap(sub, narrow ? W - 2 * px : 620, subSize)) { body.push(`<text x="${px}" y="${y}" class="bdy" font-size="${subSize}">${esc(line)}</text>`); y += subSize * 1.5; }
 
@@ -155,8 +158,11 @@ function masthead(t, narrow) {
   body.push(`<text x="${px}" y="${y}" class="hd" font-size="11">DASHBOARD BARS</text>`);
   let lx = narrow ? px : px + monoWidth("DASHBOARD BARS", 11) * 1.1 + 16;
   if (narrow) y += 22;
+  // Each swatch is a page bar: the page's track with its fill on top, in the page's own colours.
+  // The page has one light theme, so the dark masthead shows the same chips.
+  const sw = narrow ? 20 : 30;
   for (const [k, label] of [["ok", `under ${F.warnAt}% used`], ["warn", `${F.warnAt}% and over`], ["bad", `${F.badAt}% and over`]]) {
-    body.push(`<rect x="${lx}" y="${y - 8}" width="${narrow ? 20 : 30}" height="6" rx="3" fill="${t[k]}"/>`);
+    body.push(`<rect x="${lx - 2}" y="${y - 10}" width="${sw + 4}" height="10" fill="${F.barColors.track}"/><rect x="${lx}" y="${y - 8}" width="${sw}" height="6" fill="${F.barColors[k]}"/>`);
     lx += narrow ? 26 : 38;
     body.push(`<text x="${lx}" y="${y}" class="mut" font-size="${lsize}">${esc(label)}</text>`);
     lx += monoWidth(label, lsize) + (narrow ? 10 : 24);
@@ -164,14 +170,12 @@ function masthead(t, narrow) {
   y += narrow ? 26 : 28;
   const scale = `Clocks drain at ${SECONDS_PER_HOUR_OF_WINDOW} s per hour of window: a 5 h window empties every ${5 * SECONDS_PER_HOUR_OF_WINDOW} s, 7 days every ${168 * SECONDS_PER_HOUR_OF_WINDOW} s, 90 days every ${90 * 24 * SECONDS_PER_HOUR_OF_WINDOW} s.`;
   for (const line of wrap(scale, W - 2 * px, lsize)) { body.push(`<text x="${px}" y="${y}" class="mut" font-size="${lsize}">${esc(line)}</text>`); y += lsize * 1.5; }
-  if (!F.claudePoll.on || !F.codexPoll.on) {
-    y += lsize * 0.5;
-    const off = `on load: the shipped usage/accounts.json turns this poll timer off, so the tracker fetches once at startup, then on every page load and on Refresh now.`;
-    for (const line of wrap(off, W - 2 * px, lsize)) { body.push(`<text x="${px}" y="${y}" class="mut" font-size="${lsize}">${esc(line)}</text>`); y += lsize * 1.5; }
-  }
+  y += lsize * 0.5;
+  const onLoad = `${ON_LOAD}: no poll timer. Each login is fetched through CLIProxyAPI at startup, on every page load and on Refresh now; one fetched fine under ${F.refetchHealthySeconds} s ago, and not flagged by the proxy, keeps its numbers.`;
+  for (const line of wrap(onLoad, W - 2 * px, lsize)) { body.push(`<text x="${px}" y="${y}" class="mut" font-size="${lsize}">${esc(line)}</text>`); y += lsize * 1.5; }
 
   const H = Math.ceil(y + (narrow ? 24 : 32));
-  const label = `Harness Console: the app on port ${F.appPort}, the usage tracker on port ${F.port}. Usage tracker schedule board: ${F.claudeWindows.length} Claude Code rate-limit windows ${pollPhrase(F.claudePoll)}, 2 Codex windows ${pollPhrase(F.codexPoll)}, token totals over 7, 30 and 90 days rescanned every ${F.tokenScanSeconds} seconds, and one write, the Claude token refresh.`;
+  const label = `Harness Console: the app on port ${F.appPort}, the usage tracker on port ${F.port}. Usage tracker schedule board: ${F.claudeWindows.length} Claude Code rate-limit windows and 2 Codex windows, fetched through CLIProxyAPI at startup, on page load and on Refresh now with no poll timer; token totals over 7, 30 and 90 days rescanned every ${F.tokenScanSeconds} seconds; and the sign-in watch, which refreshes every ${F.watchIntervalSeconds} seconds for up to ${F.watchTimeoutMinutes} minutes after the proxy's sign-in page opens.`;
   return svg(W, H, label, body.join("\n").replaceAll("HEIGHT", String(H - 1)), css(t));
 }
 

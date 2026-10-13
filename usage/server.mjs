@@ -1,70 +1,38 @@
 // usage-dash: one local page for Claude Code + Codex usage across accounts.
-// Node >= 20, no dependencies. Loopback only. Tokens never leave this machine.
+// Node >= 20, no dependencies. Loopback only. Accounts come from the local CLIProxyAPI, which holds
+// the logins and their tokens; this process never reads a credential or refreshes a token.
 
-import { readFile, writeFile, rename, mkdir, stat } from "node:fs/promises";
+import { readFile, writeFile, rename, mkdir, stat, readdir, unlink } from "node:fs/promises";
 import { createServer } from "node:http";
-import { exec, spawn } from "node:child_process";
-import { promisify } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { TokenScanner } from "./tokens.mjs";
+import { TokenScanner, transcriptDirs } from "./tokens.mjs";
 import { Pricing } from "./pricing.mjs";
 import { localRequest } from "./guard.mjs";
+import { listAuthFiles, upstreamGet, proxyLocation } from "./proxy.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const execP = promisify(exec);
 
 // ---------- config ----------
 
-const config = JSON.parse(await readFile(path.join(here, "accounts.json"), "utf8"));
-const PORT = Number(process.env.USAGE_PORT) || (config.port ?? 4545);
-const HOME = process.env.USERPROFILE ?? process.env.HOME ?? "";
-for (const a of config.accounts) a.dir = path.resolve(a.dir.replace(/^~(?=[\\/]|$)/, HOME));
-{
-  const seen = new Set();
-  for (const a of config.accounts) {
-    const key = a.name.replace(/[^\w.-]+/g, "_");
-    if (seen.has(key)) throw new Error(`accounts.json: account name '${a.name}' collides with another entry after sanitizing; names must be unique`);
-    seen.add(key);
-  }
-}
-const STATE_DIR = path.join(here, ".state");
+const PORT = Number(process.env.USAGE_PORT) || 4545;
+const STATE_DIR = process.env.USAGE_STATE_DIR || path.join(here, ".state");
 // Before the tracker moved into usage/, its state lived at the repository root. Move it once:
 // token records outlive their transcripts, so a rescan cannot rebuild them.
 const LEGACY_STATE = path.join(here, "..", ".state");
-if (!(await stat(STATE_DIR).catch(() => null)) && (await stat(path.join(LEGACY_STATE, "tokens")).catch(() => null))) {
+if (!process.env.USAGE_STATE_DIR && !(await stat(STATE_DIR).catch(() => null)) && (await stat(path.join(LEGACY_STATE, "tokens")).catch(() => null))) {
   await rename(LEGACY_STATE, STATE_DIR).catch((e) => console.error(`could not move ${LEGACY_STATE} to ${STATE_DIR}: ${e.message}`));
 }
 await mkdir(STATE_DIR, { recursive: true });
 
-// 0 disables the timer: the account is fetched once at startup and after that only on /api/refresh.
-const CLAUDE_POLL_MS = (config.claudePollSeconds ?? 180) * 1000; // /api/oauth/usage 429s below ~180s
-const CODEX_POLL_MS = (config.codexPollSeconds ?? 60) * 1000;
-// /api/refresh skips an account fetched more recently than this. Default 0: every page load and
-// "Refresh now" polls upstream. A 429 from the usage API still parks that account for five minutes.
-const CLAUDE_MIN_GAP_MS = (config.claudeMinRefreshSeconds ?? 0) * 1000;
-const CODEX_MIN_GAP_MS = (config.codexMinRefreshSeconds ?? 0) * 1000;
-const HTTP_TIMEOUT_MS = 15_000;
-const TOKEN_SCAN_MS = (config.tokenScanSeconds ?? 300) * 1000;
+const RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000; // /api/oauth/usage 429s on fast polling
+const TOKEN_SCAN_MS = 300 * 1000;
+// The sign-in watch posts /api/refresh every 5 s; a healthy login is re-fetched at most this often.
+const REFETCH_HEALTHY_MS = 60 * 1000;
 
 // ---------- shared ----------
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
-
-async function fetchJson(url, opts = {}) {
-  const res = await fetch(url, { ...opts, signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
-  const text = await res.text();
-  let json = null;
-  try { json = text ? JSON.parse(text) : null; } catch { /* non-JSON body */ }
-  return { status: res.status, ok: res.ok, headers: res.headers, json, text };
-}
-
-function jwtPayload(token) {
-  try {
-    const part = token.split(".")[1];
-    return JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
-  } catch { return null; }
-}
 
 async function writeAtomic(file, content) {
   const tmp = `${file}.usage-dash-tmp.${process.pid}.${Date.now()}`;
@@ -74,8 +42,10 @@ async function writeAtomic(file, content) {
   await rename(tmp, file);
 }
 
+// Upstream headers arrive through the proxy as a plain object, values possibly arrays.
 function retryAfterMs(headers, fallbackMs) {
-  const v = headers?.get?.("retry-after");
+  const k = Object.keys(headers ?? {}).find((h) => h.toLowerCase() === "retry-after");
+  const v = k ? [headers[k]].flat()[0] : null;
   if (!v) return fallbackMs;
   const n = Number(v);
   if (Number.isFinite(n)) return n * 1000;
@@ -83,123 +53,24 @@ function retryAfterMs(headers, fallbackMs) {
   return Number.isFinite(t) ? Math.max(0, t - Date.now()) : fallbackMs;
 }
 
-// ---------- Claude Code ----------
-
-const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-const CLAUDE_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
-const CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"; // Claude Code's own OAuth client id
-const CLAUDE_BETA = "oauth-2025-04-20";
-const CLAUDE_EXPIRY_SKEW_MS = 5 * 60 * 1000;
-const CLAUDE_RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000;
-
-let claudeUserAgent = "claude-code/2.1.0";
-try {
-  const { stdout } = await execP("claude --version", { timeout: 8000 }); // shell: claude is a .cmd shim on Windows
-  const m = stdout.match(/(\d+\.\d+\.\d+)/);
-  if (m) claudeUserAgent = `claude-code/${m[1]}`;
-} catch { /* keep fallback */ }
-
-async function claudeReadCreds(dir) {
-  const file = path.join(dir, ".credentials.json");
-  const root = JSON.parse(await readFile(file, "utf8"));
-  const o = root.claudeAiOauth;
-  if (!o?.accessToken) throw new Error("no claudeAiOauth.accessToken; run `claude` in this config dir to log in");
-  return { file, root, o };
-}
-
-// Account identity comes from the token, not from .claude.json (that file goes stale after account switches).
-const CLAUDE_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
-async function claudeProfile(state, o) {
-  const key = o.accessToken.slice(-16);
-  if (state.profileKey === key) return state.profile;
-  let r;
-  try {
-    r = await fetchJson(CLAUDE_PROFILE_URL, {
-      headers: { authorization: `Bearer ${o.accessToken}`, accept: "application/json", "anthropic-beta": CLAUDE_BETA, "user-agent": claudeUserAgent },
-    });
-  } catch { return null; } // optional enrichment: never fail the usage poll
-  if (!r.ok) return null; // token changed and lookup failed: no stale email from a previous account
-  state.profileKey = key;
-  state.profile = { email: r.json?.account?.email ?? null, org: r.json?.organization?.name ?? null };
-  return state.profile;
-}
-
-function claudeExpired(o) {
-  return typeof o.expiresAt === "number" && o.expiresAt <= Date.now() + CLAUDE_EXPIRY_SKEW_MS;
-}
-
-async function claudeRefresh(acct, creds) {
-  const { o, file, root } = creds;
-  const originalAccess = o.accessToken;
-  if (!o.refreshToken) throw new Error("token expired and no refreshToken; run `claude` to log in");
-  const body = { grant_type: "refresh_token", refresh_token: o.refreshToken, client_id: CLAUDE_CLIENT_ID };
-  if (Array.isArray(o.scopes) && o.scopes.length) body.scope = o.scopes.join(" ");
-  const r = await fetchJson(CLAUDE_TOKEN_URL, {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json", "anthropic-beta": CLAUDE_BETA },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) {
-    const err = r.json?.error;
-    const terminal = (r.status === 400 || r.status === 401) && String(err).toLowerCase() === "invalid_grant";
-    const e = new Error(`token refresh failed (${r.status}): ${r.text.slice(0, 160)}`);
-    e.terminal = terminal;
-    throw e;
-  }
-  const j = r.json;
-  o.accessToken = j.access_token;
-  if (j.refresh_token) o.refreshToken = j.refresh_token;
-  o.expiresAt = Date.now() + (j.expires_in ?? 3600) * 1000;
-  if (j.scope) o.scopes = j.scope.split(" ");
-  // Re-read before writing: if the CLI logged in, switched account, or refreshed meanwhile, keep its version.
-  let latest;
-  try { latest = JSON.parse(await readFile(file, "utf8")); } catch { latest = null; }
-  const cur = latest?.claudeAiOauth;
-  if (cur && (cur.refreshToken !== body.refresh_token || cur.accessToken !== originalAccess)) {
-    log(`[${acct.name}] credentials changed on disk during refresh; using the CLI's version`);
-    return { file, root: latest, o: cur };
-  }
-  root.claudeAiOauth = o;
-  await writeAtomic(file, JSON.stringify(root, null, 2)); // CLI reads this file fresh; same write the CLI does
-  log(`[${acct.name}] refreshed Claude OAuth token`);
-  return creds;
-}
-
-async function claudeFetch(acct, state) {
-  if (state.backoffUntil && Date.now() < state.backoffUntil) {
-    throw new Error(state.backoffReason);
-  }
-  let creds = await claudeReadCreds(acct.dir);
-  if (claudeExpired(creds.o)) {
-    if (state.refreshDeadForToken === creds.o.refreshToken) {
-      throw new Error("refresh token rejected (invalid_grant); run `claude` in this config dir to log in again");
-    }
-    try {
-      creds = await claudeRefresh(acct, creds);
-    } catch (e) {
-      if (e.terminal) state.refreshDeadForToken = creds.o.refreshToken;
-      else { state.backoffUntil = Date.now() + CLAUDE_RATE_LIMIT_BACKOFF_MS; state.backoffReason = e.message; }
-      throw e;
-    }
-  }
-  const o = creds.o;
-  const r = await fetchJson(CLAUDE_USAGE_URL, {
-    headers: {
-      authorization: `Bearer ${o.accessToken}`,
-      accept: "application/json",
-      "anthropic-beta": CLAUDE_BETA,
-      "user-agent": claudeUserAgent,
-    },
-  });
+// One usage call through the proxy with the shared error handling: 429 parks the account.
+async function usageBody(file, state) {
+  if (state.backoffUntil && Date.now() < state.backoffUntil) throw new Error(state.backoffReason);
+  const r = await upstreamGet(file.auth_index, file.provider, "usage");
   if (r.status === 429) {
-    const ms = retryAfterMs(r.headers, CLAUDE_RATE_LIMIT_BACKOFF_MS);
+    const ms = retryAfterMs(r.headers, RATE_LIMIT_BACKOFF_MS);
     state.backoffUntil = Date.now() + ms;
     state.backoffReason = `rate limited by usage API; retrying in ${Math.round(ms / 1000)}s`;
     throw new Error(state.backoffReason);
   }
-  if (r.status === 401) throw new Error("usage API 401: token invalid; run `claude` in this config dir");
+  if (r.status === 401) throw new Error("usage API 401: the proxy's token for this login was rejected; sign in again in the proxy panel");
   if (!r.ok) throw new Error(`usage API ${r.status}: ${r.text.slice(0, 160)}`);
-  const j = r.json ?? {};
+  return r.json ?? {};
+}
+
+// ---------- Claude Code ----------
+
+function claudeWindows(j) {
   const win = (w, label) => w && (w.utilization != null || w.resets_at || w.resetsAt)
     ? { label, usedPercent: w.utilization ?? 0, resetsAt: w.resets_at ?? w.resetsAt ?? null }
     : null;
@@ -223,47 +94,39 @@ async function claudeFetch(acct, state) {
   if (extra?.is_enabled ?? extra?.isEnabled) {
     notes.push(`Extra usage: ${extra.used_credits ?? extra.usedCredits ?? 0} / ${extra.monthly_limit ?? extra.monthlyLimit ?? "?"} ${extra.currency ?? ""}`.trim());
   }
-  return {
-    plan: o.subscriptionType ?? "",
-    email: (await claudeProfile(state, o))?.email ?? null,
-    tokenExpiresAt: o.expiresAt ? new Date(o.expiresAt).toISOString() : null,
-    windows,
-    notes,
-    warnings: [],
-  };
+  return { windows, notes, warnings: [] };
+}
+
+const CLAUDE_PLAN = { claude_max: "Claude Max", claude_pro: "Claude Pro", claude_team: "Claude Team", claude_enterprise: "Claude Enterprise" };
+
+// The plan never changes under one login, so the profile is fetched once per login per process.
+const claudePlans = new Map(); // auth_index -> plan
+async function claudePlan(file) {
+  if (claudePlans.has(file.auth_index)) return claudePlans.get(file.auth_index);
+  let r;
+  try { r = await upstreamGet(file.auth_index, "claude", "profile"); } catch { return ""; } // optional enrichment
+  if (!r.ok || !r.json) return "";
+  const org = r.json.organization ?? {}, acct = r.json.account ?? {};
+  const type = org.organization_type ?? "";
+  const base = CLAUDE_PLAN[type] ?? (acct.has_claude_max ? "Claude Max" : acct.has_claude_pro ? "Claude Pro" : type);
+  const mult = /_(\d+x)$/.exec(org.rate_limit_tier ?? "")?.[1]; // default_claude_max_20x
+  const plan = base && mult ? `${base} ${mult}` : base;
+  claudePlans.set(file.auth_index, plan);
+  return plan;
+}
+
+async function claudeFetch(file, state) {
+  const j = await usageBody(file, state);
+  return { plan: await claudePlan(file), data: claudeWindows(j) };
 }
 
 // ---------- Codex ----------
 
-const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
-const CODEX_UA = "usage-dash";
-const CODEX_EXPIRY_WARN_MS = 24 * 60 * 60 * 1000;
-
 const CODEX_PLAN = {
   free: "ChatGPT Free", go: "Codex Go", plus: "ChatGPT Plus", pro: "ChatGPT Pro", pro_lite: "ChatGPT Pro Lite", prolite: "ChatGPT Pro Lite", team: "ChatGPT Team",
-  business: "ChatGPT Business", enterprise: "ChatGPT Enterprise", education: "ChatGPT Education",
+  business: "ChatGPT Business", enterprise: "ChatGPT Enterprise", education: "ChatGPT Education", promax: "ChatGPT Pro Max",
 };
-
-async function codexReadCreds(dir) {
-  const file = path.join(dir, "auth.json");
-  const root = JSON.parse(await readFile(file, "utf8"));
-  if (typeof root.OPENAI_API_KEY === "string" && root.OPENAI_API_KEY.trim()) {
-    throw new Error("auth.json holds an API key, not a ChatGPT login; rate-limit windows need `codex login`");
-  }
-  const t = root.tokens;
-  if (!t?.access_token) throw new Error("no tokens.access_token; run `codex login` with CODEX_HOME set to this dir");
-  const access = jwtPayload(t.access_token);
-  const id = jwtPayload(t.id_token ?? "") ?? {};
-  const auth = id["https://api.openai.com/auth"] ?? {};
-  return {
-    accessToken: t.access_token,
-    accountId: t.account_id || auth.chatgpt_account_id || null,
-    email: id.email ?? null,
-    planType: auth.chatgpt_plan_type ?? null,
-    expiresAt: access?.exp ? access.exp * 1000 : null,
-    lastRefresh: root.last_refresh ?? null,
-  };
-}
+const codexPlan = (key) => (key ? (CODEX_PLAN[key] ?? `ChatGPT ${key}`) : "");
 
 function codexWindow(w, label) {
   if (!w || typeof w !== "object") return null;
@@ -276,28 +139,7 @@ function codexWindow(w, label) {
   return { label: label ?? auto, usedPercent: used ?? 0, resetsAt: reset != null ? new Date(reset * 1000).toISOString() : null, windowMinutes: mins };
 }
 
-async function codexFetch(acct, state) {
-  if (state.backoffUntil && Date.now() < state.backoffUntil) throw new Error(state.backoffReason);
-  const c = await codexReadCreds(acct.dir);
-  const warnings = [];
-  if (c.expiresAt != null) {
-    if (c.expiresAt <= Date.now()) throw new Error(`access token expired ${new Date(c.expiresAt).toISOString()}; run \`codex\` (with CODEX_HOME=${acct.dir}) so the CLI refreshes it`);
-    if (c.expiresAt - Date.now() < CODEX_EXPIRY_WARN_MS) warnings.push(`token expires ${new Date(c.expiresAt).toLocaleString()}; run codex to refresh`);
-  }
-  const headers = { authorization: `Bearer ${c.accessToken}`, accept: "application/json", "user-agent": CODEX_UA };
-  if (c.accountId) headers["chatgpt-account-id"] = c.accountId;
-
-  const r = await fetchJson(`${CODEX_BASE_URL}/wham/usage`, { headers });
-  if (r.status === 401) throw new Error("usage API 401: token invalid; run `codex login` for this CODEX_HOME");
-  if (r.status === 429) {
-    const ms = retryAfterMs(r.headers, 5 * 60 * 1000);
-    state.backoffUntil = Date.now() + ms;
-    state.backoffReason = `rate limited by usage API; retrying in ${Math.round(ms / 1000)}s`;
-    throw new Error(state.backoffReason);
-  }
-  if (!r.ok) throw new Error(`usage API ${r.status}: ${r.text.slice(0, 160)}`);
-  const j = r.json ?? {};
-
+function codexWindows(j) {
   let windows = [];
   if (j.rate_limit) {
     windows = [codexWindow(j.rate_limit.primary_window, null), codexWindow(j.rate_limit.secondary_window, null)].filter(Boolean);
@@ -311,116 +153,171 @@ async function codexFetch(acct, state) {
 
   const notes = [];
   const credits = j.credits;
-  if (credits?.has_credits && !credits.unlimited && credits.balance != null) notes.push(`Credits: $${Number(credits.balance).toFixed(2)}`);
+  // `balance` is a credit count (a decimal string such as "62500.0000000000"), not money: the body has no currency field.
+  if (credits?.has_credits && !credits.unlimited && credits.balance != null) notes.push(`Credits: ${Number(credits.balance).toLocaleString("en-US", { maximumFractionDigits: 2 })}`);
+  // banked rate-limit resets
+  const avail = Number(j.rate_limit_reset_credits?.available_count ?? 0);
+  if (avail > 0) notes.push(`${avail} banked reset${avail === 1 ? "" : "s"}`);
+  return { windows, notes, warnings: [] };
+}
 
-  // banked rate-limit resets (30-day expiry after grant)
-  try {
-    const rc = await fetchJson(`${CODEX_BASE_URL}/wham/rate-limit-reset-credits`, { headers });
-    if (rc.ok && rc.json) {
-      const avail = Number(rc.json.available_count ?? 0);
-      const list = Array.isArray(rc.json.credits) ? rc.json.credits : [];
-      const soonest = list
-        .filter((x) => !x.status || String(x.status).toLowerCase() === "available")
-        .map((x) => Date.parse(x.expires_at ?? ""))
-        .filter((t) => Number.isFinite(t) && t > Date.now())
-        .sort((a, b) => a - b)[0];
-      if (avail > 0) notes.push(`${avail} banked reset${avail === 1 ? "" : "s"}${soonest ? `, first expires ${new Date(soonest).toLocaleDateString()}` : ""}`);
-    }
-  } catch { /* optional enrichment */ }
-
-  const planKey = j.plan_type ?? c.planType;
-  return {
-    plan: planKey ? (CODEX_PLAN[planKey] ?? `ChatGPT ${planKey}`) : "",
-    email: c.email,
-    tokenExpiresAt: c.expiresAt ? new Date(c.expiresAt).toISOString() : null,
-    windows,
-    notes,
-    warnings,
-  };
+async function codexFetch(file, state) {
+  const j = await usageBody(file, state);
+  return { plan: codexPlan(file.id_token?.plan_type ?? j.plan_type), data: codexWindows(j) };
 }
 
 // ---------- poller ----------
 
-const PROVIDERS = { claude: { fetch: claudeFetch, pollMs: CLAUDE_POLL_MS, minGapMs: CLAUDE_MIN_GAP_MS }, codex: { fetch: codexFetch, pollMs: CODEX_POLL_MS, minGapMs: CODEX_MIN_GAP_MS } };
+const FETCH = { claude: claudeFetch, codex: codexFetch };
+const CACHE_FILE = path.join(STATE_DIR, "usage-cache.json");
 
-const snapshots = new Map(); // name -> { ok, fetchedAt, data | error, dir, kind }
-const pollState = new Map();
-
-function stateFile(acct) {
-  return path.join(STATE_DIR, `${acct.name.replace(/[^\w.-]+/g, "_")}.json`);
+// Earlier versions kept one snapshot file per configured account name (Claude_1.json) and could
+// leave temp files behind; this version keeps one cache file.
+for (const name of await readdir(STATE_DIR)) {
+  const file = path.join(STATE_DIR, name);
+  if (name.includes(".usage-dash-tmp.")) { await unlink(file).catch(() => {}); continue; }
+  if (!name.endsWith(".json") || name === "usage-cache.json" || name === "pricing.json") continue;
+  try {
+    const j = JSON.parse(await readFile(file, "utf8"));
+    if (j && typeof j === "object" && "name" in j && "kind" in j && "dir" in j) { await unlink(file); log(`removed legacy snapshot ${name}`); }
+  } catch { /* not ours */ }
 }
 
-async function loadCachedSnapshot(acct) {
-  try {
-    const s = JSON.parse(await readFile(stateFile(acct), "utf8"));
-    if (s?.ok) snapshots.set(acct.name, { ...s, stale: true });
-  } catch { /* none */ }
+const accounts = new Map(); // id -> public account entry (see /api/usage)
+const pollState = new Map(); // id -> { backoffUntil, backoffReason }
+let proxy = { ok: false, ...(await proxyLocation()), error: "not checked yet", checkedAt: null };
+
+// Last good data per account survives restarts and proxy outages.
+try {
+  const c = JSON.parse(await readFile(CACHE_FILE, "utf8"));
+  for (const a of Object.values(c.accounts ?? {})) {
+    if (a?.id && a.data) accounts.set(a.id, { ...a, ok: false, stale: true, fetchedAt: null, error: null });
+  }
+} catch { /* none */ }
+
+async function saveCache() {
+  const out = {};
+  for (const a of accounts.values()) if (a.data) out[a.id] = a;
+  await writeAtomic(CACHE_FILE, JSON.stringify({ version: 1, accounts: out }));
 }
 
-async function pollOnce(acct) {
-  const p = PROVIDERS[acct.kind];
-  const st = pollState.get(acct.name) ?? {};
-  pollState.set(acct.name, st);
+function accountId(f) {
+  return `${f.provider}:${String(f.email || f.label || f.name || f.auth_index).toLowerCase()}`;
+}
+
+async function pollAccount(f, entry) {
+  const prev = accounts.get(entry.id);
+  if (entry.disabled) {
+    return { ...entry, ok: false, stale: !!prev?.data, fetchedAt: prev?.fetchedAt ?? null, lastGoodAt: prev?.lastGoodAt ?? null, error: null, data: prev?.data ?? null };
+  }
+  // Fetched fine moments ago and the proxy does not flag it: keep those numbers, refresh the listing fields.
+  if (prev?.ok && !entry.proxyMessage && !entry.unavailable && prev.fetchedAt && Date.now() - Date.parse(prev.fetchedAt) < REFETCH_HEALTHY_MS) {
+    return { ...prev, ...entry, plan: entry.plan || prev.plan || "" };
+  }
+  const st = pollState.get(entry.id) ?? {};
+  pollState.set(entry.id, st);
+  const now = new Date().toISOString();
   try {
-    const data = await p.fetch(acct, st);
-    const snap = { name: acct.name, kind: acct.kind, dir: acct.dir, ok: true, fetchedAt: new Date().toISOString(), data };
-    snapshots.set(acct.name, snap);
-    await writeAtomic(stateFile(acct), JSON.stringify(snap));
+    const { plan, data } = await FETCH[f.provider](f, st);
+    return { ...entry, plan: plan || prev?.plan || "", ok: true, stale: false, fetchedAt: now, lastGoodAt: now, error: null, data };
   } catch (e) {
-    const prev = snapshots.get(acct.name);
-    snapshots.set(acct.name, {
-      name: acct.name, kind: acct.kind, dir: acct.dir, ok: false,
-      fetchedAt: new Date().toISOString(),
-      error: e?.code === "ENOENT" ? `no credentials at ${acct.dir}; log in there first` : String(e.message ?? e),
-      data: prev?.data ?? null, lastGoodAt: prev?.ok ? prev.fetchedAt : prev?.lastGoodAt ?? null,
-    });
-    log(`[${acct.name}] ${e.message ?? e}`);
+    log(`[${entry.id}] ${e.message ?? e}`);
+    return { ...entry, plan: entry.plan || prev?.plan || "", ok: false, stale: !!prev?.data, fetchedAt: now, lastGoodAt: prev?.lastGoodAt ?? null, error: String(e.message ?? e), data: prev?.data ?? null };
   }
 }
 
-function schedule(acct) {
-  const p = PROVIDERS[acct.kind];
-  if (!p) { log(`[${acct.name}] unknown kind '${acct.kind}'`); return; }
-  const tick = async () => { await pollOnce(acct); if (p.pollMs > 0) setTimeout(tick, p.pollMs).unref?.(); };
-  tick();
+async function poll() {
+  const checkedAt = new Date().toISOString();
+  const loc = await proxyLocation();
+  let files;
+  try {
+    files = (await listAuthFiles()).filter((f) => FETCH[f.provider]);
+  } catch (e) {
+    const error = String(e.message ?? e);
+    proxy = { ok: false, ...loc, error, checkedAt };
+    for (const a of accounts.values()) accounts.set(a.id, { ...a, ok: false, stale: true, error });
+    log(`proxy: ${error}`);
+    return;
+  }
+  const count = new Map();
+  for (const f of files) count.set(accountId(f), (count.get(accountId(f)) ?? 0) + 1);
+  const next = await Promise.all(files.map((f) => {
+    const base = accountId(f), duplicate = count.get(base) > 1;
+    const entry = {
+      id: duplicate ? `${base}#${f.auth_index}` : base,
+      kind: f.provider,
+      email: f.email || null,
+      label: f.label || null,
+      plan: f.provider === "codex" ? codexPlan(f.id_token?.plan_type) : (claudePlans.get(f.auth_index) ?? ""),
+      disabled: !!f.disabled,
+      duplicate,
+      proxyStatus: f.status ?? null,
+      proxyMessage: f.status_message || null,
+      unavailable: !!f.unavailable,
+    };
+    return pollAccount(f, entry);
+  }));
+  // A login the proxy no longer lists is gone, from the page and from the cache. The proxy status and
+  // the accounts from this check are published together, so /api/usage never pairs a checked proxy
+  // with an account list that check has not filled yet; until then the previous accounts stay visible.
+  accounts.clear();
+  for (const a of next) accounts.set(a.id, a);
+  proxy = { ok: true, ...loc, error: null, checkedAt };
+  for (const id of pollState.keys()) if (!accounts.has(id)) pollState.delete(id);
+  await saveCache().catch((e) => log(`cache: ${e.message}`));
 }
 
-for (const acct of config.accounts) {
-  await loadCachedSnapshot(acct);
-  schedule(acct);
+// Concurrent refreshes share one poll.
+let polling = null;
+function pollAll() {
+  polling ??= poll().catch((e) => log(`poll failed: ${e.message ?? e}`)).finally(() => { polling = null; });
+  return polling;
 }
+
+function usagePayload() {
+  const order = { claude: 0, codex: 1 };
+  const list = [...accounts.values()].sort((a, b) => order[a.kind] - order[b.kind] || String(a.email ?? "").toLowerCase().localeCompare(String(b.email ?? "").toLowerCase()) || a.id.localeCompare(b.id));
+  return { now: new Date().toISOString(), proxy, accounts: list };
+}
+
+pollAll();
 
 // ---------- tokens ----------
 
 await mkdir(path.join(STATE_DIR, "tokens"), { recursive: true });
-const pricing = new Pricing(path.join(STATE_DIR, "pricing.json"), writeAtomic, log, config.priceAliases ?? {});
+const pricing = new Pricing(path.join(STATE_DIR, "pricing.json"), writeAtomic, log);
 await pricing.load();
-// One scanner per distinct transcript dir. Accounts that share a dir (logging
-// out and back in with another email) cannot be told apart in the transcripts,
-// so totals are reported per provider, not per account.
-const scanners = new Map();
-for (const a of config.accounts) {
-  const key = `${a.kind}:${a.dir.toLowerCase()}`;
-  if (scanners.has(key)) continue;
-  const file = path.join(STATE_DIR, "tokens", `${a.kind}-${a.dir.replace(/[^\w.-]+/g, "_")}.json`);
-  scanners.set(key, new TokenScanner({ name: `${a.kind} ${a.dir}`, kind: a.kind, dir: a.dir }, file, writeAtomic, log));
+// One scanner per transcript dir. Accounts that share a dir (logging out and back in with another
+// email) cannot be told apart in the transcripts, so totals are reported per provider, not per account.
+const scanners = [];
+for (const { kind, dir } of await transcriptDirs()) {
+  const file = path.join(STATE_DIR, "tokens", `${kind}-${dir.replace(/[^\w.-]+/g, "_")}.json`);
+  scanners.push(new TokenScanner({ name: `${kind} ${dir}`, kind, dir }, file, writeAtomic, log));
 }
-for (const s of scanners.values()) await s.load();
+for (const s of scanners) await s.load();
 
 async function scanAll() {
   await pricing.refresh();
-  for (const s of scanners.values()) await s.scan();
+  for (const s of scanners) await s.scan();
+}
+// One scan at a time: the timer and refreshes join a running scan instead of starting another.
+// A cold scan of a large transcript history takes minutes.
+let scanning = null;
+function scanTokens() {
+  scanning ??= scanAll().catch((e) => log(`tokens: scan failed: ${e.message ?? e}`)).finally(() => { scanning = null; });
+  return scanning;
 }
 (async function tokenTick() {
-  try { await scanAll(); } catch (e) { log(`tokens: scan failed: ${e.message ?? e}`); }
-  finally { setTimeout(tokenTick, TOKEN_SCAN_MS).unref?.(); }
+  await scanTokens();
+  setTimeout(tokenTick, TOKEN_SCAN_MS).unref?.();
 })();
 
 function tokensPayload(days) {
   return {
     now: new Date().toISOString(),
+    scanning: !!scanning,
     pricing: { status: pricing.status, fetchedAt: pricing.fetchedAt ? new Date(pricing.fetchedAt).toISOString() : null },
-    providers: ["claude", "codex"].map((kind) => mergeSummaries(kind, [...scanners.values()].filter((s) => s.acct.kind === kind).map((s) => ({ dir: s.acct.dir, ...s.summary(days, pricing) })))),
+    providers: ["claude", "codex"].map((kind) => mergeSummaries(kind, scanners.filter((s) => s.acct.kind === kind).map((s) => ({ dir: s.acct.dir, ...s.summary(days, pricing) })))),
   };
 }
 
@@ -444,6 +341,7 @@ function mergeSummaries(kind, parts) {
 // ---------- http ----------
 
 const indexHtml = await readFile(path.join(here, "index.html"), "utf8");
+const cardsJs = await readFile(path.join(here, "cards.mjs"), "utf8");
 
 createServer((req, res) => {
   // Only loopback pages (the Harness Console on any port) may frame the tracker.
@@ -452,7 +350,7 @@ createServer((req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
   if (url.pathname === "/api/usage") {
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-    res.end(JSON.stringify({ now: new Date().toISOString(), accounts: config.accounts.map((a) => snapshots.get(a.name) ?? { name: a.name, kind: a.kind, ok: false, error: "not fetched yet" }) }));
+    res.end(JSON.stringify(usagePayload()));
     return;
   }
   if (url.pathname === "/api/tokens") {
@@ -461,24 +359,10 @@ createServer((req, res) => {
     res.end(JSON.stringify(tokensPayload(days)));
     return;
   }
-  if (url.pathname === "/api/login" && req.method === "POST") {
-    // A dead refresh token needs a fresh browser sign-in, which only the CLI can run. Open a console
-    // window with the account's config dir set so the new token lands in the file the tracker reads.
-    const acct = config.accounts.find((a) => a.name === url.searchParams.get("account"));
-    if (!acct) { res.writeHead(404); res.end(); return; }
-    if (process.platform !== "win32") { res.writeHead(501, { "content-type": "text/plain" }); res.end("sign-in window is Windows only; run the CLI login yourself"); return; }
-    const [envName, command] = acct.kind === "codex" ? ["CODEX_HOME", "codex login"] : ["CLAUDE_CONFIG_DIR", "claude auth login"];
-    const child = spawn("cmd.exe", ["/c", "start", `${acct.name} sign-in`, "cmd.exe", "/k", `set "${envName}=${acct.dir}" && ${command}`], { detached: true, stdio: "ignore", shell: false, windowsHide: false });
-    child.on("error", (e) => log(`[${acct.name}] sign-in window failed: ${e.message}`));
-    child.unref();
-    log(`[${acct.name}] opened sign-in window (${command})`);
-    res.writeHead(204); res.end();
-    return;
-  }
   if (url.pathname === "/api/refresh" && req.method === "POST") {
-    // Only a healthy snapshot is throttled; an account in error retries at once so a fresh sign-in shows up.
-    const fresh = (a) => snapshots.get(a.name)?.ok && Date.now() - Date.parse(snapshots.get(a.name).fetchedAt) < PROVIDERS[a.kind].minGapMs;
-    Promise.all([...config.accounts.filter((a) => !fresh(a)).map(pollOnce), scanAll().catch((e) => log(`tokens: scan failed: ${e.message ?? e}`))]).then(() => { res.writeHead(204); res.end(); });
+    // Answers once the accounts are polled; the token scan goes on in the background.
+    scanTokens();
+    pollAll().then(() => { res.writeHead(204); res.end(); });
     return;
   }
   if (url.pathname === "/") {
@@ -486,5 +370,10 @@ createServer((req, res) => {
     res.end(indexHtml);
     return;
   }
+  if (url.pathname === "/cards.mjs" && req.method === "GET") {
+    res.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
+    res.end(cardsJs);
+    return;
+  }
   res.writeHead(404); res.end();
-}).listen(PORT, "127.0.0.1", () => log(`usage-dash on http://127.0.0.1:${PORT}  (${config.accounts.length} accounts, UA ${claudeUserAgent})`));
+}).listen(PORT, "127.0.0.1", () => log(`usage-dash on http://127.0.0.1:${PORT}  (accounts from CLIProxyAPI at ${proxy.url})`));
