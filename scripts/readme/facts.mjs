@@ -69,8 +69,13 @@ export function collectFacts() {
     if (!name) throw new Error(`facts: no README colour name for --${k} ${barColors[k]} in usage/index.html`);
     return [k, name];
   }));
-  // Status order the README states: disabled, stale ("As of"), proxy unreachable, rate limited, sign-in needed, live.
-  must(cards, /statusText: a\.disabled \? "Disabled in proxy" : stale \? `As of [^`]*` : !proxy\.ok \? "Proxy unreachable" : rateLimited \? "Rate limited" : broken \? "Sign-in needed" : !a\.ok \? "Fetch failed" : "Live"/, "usage/cards.mjs status order changed");
+  // Status order the README states: disabled, sign-in needed (proxy up), stale ("As of"), proxy unreachable, rate limited, fetch failed, live.
+  must(cards, /statusText: a\.disabled \? "Disabled in proxy" : broken && proxy\.ok \? "Sign-in needed" : stale \? `As of [^`]*` : !proxy\.ok \? "Proxy unreachable" : rateLimited \? "Rate limited" : !a\.ok \? "Fetch failed" : "Live"/, "usage/cards.mjs status order changed");
+  // The README says a rate limit does not hide the sign-in button and drops the Refresh hint for a rejected login.
+  must(cards, /const signIn = broken && proxy\.ok && proxy\.panelUrl \? \{ url: proxy\.panelUrl \} : null;/, "usage/cards.mjs sign-in button conditions changed");
+  must(cards, /rateLimitText\(a\.retryAt, now, !broken\)/, "usage/cards.mjs Refresh hint for a rejected login changed");
+  // The README says a rewritten login file clears a parked 429.
+  must(server, /if \(st\.backoffUntil && st\.modtime && f\.modtime && f\.modtime !== st\.modtime\) st\.backoffUntil = null;/, "usage/server.mjs no longer clears a parked 429 when the login file changes");
   // Sign-in is for a rejected credential only: a usage API 401 or 403, a token the proxy cannot produce,
   // or the proxy's auth-failure markers. Cooldown and upstream-error flags are not.
   must(cards, /const broken = !a\.disabled && signInNeeded\(a\);/, "usage/cards.mjs offers sign-in on different conditions now");
@@ -91,7 +96,6 @@ export function collectFacts() {
   must(proxySrc, /if \(provider === "codex" && accountId\) header\["chatgpt-account-id"\] = String\(accountId\);/, "usage/proxy.mjs no longer sends chatgpt-account-id on Codex calls");
   must(server, /usageBody\(file, state, file\.id_token\?\.chatgpt_account_id\)/, "usage/server.mjs no longer takes the Codex account id from id_token");
   must(cards, /const rateLimited = !a\.ok && !!a\.rateLimited;/, "usage/cards.mjs no longer reads the server's rate-limit flag");
-  must(cards, /panelUrl && !rateLimited \?/, "usage/cards.mjs offers sign-in to a rate-limited login now");
   must(cards, /dim: stale \|\| !!a\.disabled \|\| \(!proxy\.ok && !d\)/, "usage/cards.mjs greys different rows now");
   // The refetch skip conditions the README lists.
   must(server, /if \(prev\?\.ok && !signInNeeded\(entry\) && prev\.fetchedAt && Date\.now\(\) - Date\.parse\(prev\.fetchedAt\) < REFETCH_HEALTHY_MS\)/, "usage/server.mjs skips a refetch on different conditions now");
