@@ -228,6 +228,10 @@ async function pollAccount(f, entry) {
   }
   const st = pollState.get(entry.id) ?? {};
   pollState.set(entry.id, st);
+  // A new sign-in keeps the login's file and auth_index but rewrites the file with a new token. A 429
+  // parked under the old token is then worth one retry; another 429 parks it again.
+  if (st.backoffUntil && st.modtime && f.modtime && f.modtime !== st.modtime) st.backoffUntil = null;
+  st.modtime = f.modtime ?? null;
   const now = new Date().toISOString();
   try {
     const { plan, data } = await FETCH[f.provider](f, st);
@@ -282,12 +286,18 @@ async function poll() {
   for (const a of next) accounts.set(a.id, a);
   proxy = { ok: true, ...loc, error: null, checkedAt };
   for (const id of pollState.keys()) if (!accounts.has(id)) pollState.delete(id);
+  pollPublished = true;
   await saveCache().catch((e) => log(`cache: ${e.message}`));
 }
 
-// Concurrent refreshes share one poll.
+// Concurrent refreshes share one poll. A refresh that arrives after the running poll published its
+// accounts, while it only saves the cache, would get numbers fetched before it asked: it waits for that
+// poll and starts the next one (or joins one another refresh started).
 let polling = null;
+let pollPublished = false;
 function pollAll() {
+  if (polling && pollPublished) return polling.then(() => pollAll());
+  if (!polling) pollPublished = false;
   polling ??= poll().catch((e) => log(`poll failed: ${e.message ?? e}`)).finally(() => { polling = null; });
   return polling;
 }

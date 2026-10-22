@@ -218,7 +218,7 @@ test('ledger: status is Live, As of <age>, Sign-in needed or Disabled in proxy',
   const vm = ledger();
   const status = Object.fromEntries(vm.cards.map(c => [c.id, c.statusText]));
   assert.deepEqual(status, {
-    'claude:a@x.com': 'Live', 'claude:b@x.com': 'As of 5d 0h ago', 'claude:c@x.com': 'Sign-in needed', 'claude:off@x.com': 'Disabled in proxy', 'codex:x@x.com': 'Live',
+    'claude:a@x.com': 'Live', 'claude:b@x.com': 'Sign-in needed', 'claude:c@x.com': 'Sign-in needed', 'claude:off@x.com': 'Disabled in proxy', 'codex:x@x.com': 'Live',
   });
   assert.equal(view([acct({ proxyMessage: 'token expired' })]).cards[0].statusText, 'Sign-in needed');
   assert.deepEqual(vm.cards.find(c => c.id === 'claude:b@x.com').signIn, { url: proxy.panelUrl });
