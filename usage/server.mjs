@@ -228,6 +228,10 @@ async function pollAccount(f, entry) {
   }
   const st = pollState.get(entry.id) ?? {};
   pollState.set(entry.id, st);
+  // A new sign-in keeps the login's file and auth_index but rewrites the file with a new token. A 429
+  // parked under the old token is then worth one retry; another 429 parks it again.
+  if (st.backoffUntil && st.modtime && f.modtime && f.modtime !== st.modtime) st.backoffUntil = null;
+  st.modtime = f.modtime ?? null;
   const now = new Date().toISOString();
   try {
     const { plan, data } = await FETCH[f.provider](f, st);
