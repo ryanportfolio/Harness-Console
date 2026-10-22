@@ -34,6 +34,8 @@ export function collectFacts() {
   // Polling: no timer. The server polls once at startup and on POST /api/refresh, which the page
   // sends on load, on "Refresh now" and every few seconds while it watches for a sign-in.
   must(server, /^pollAll\(\);$/m, "usage/server.mjs no longer polls once at startup");
+  // A refresh after the running poll published its accounts waits for it and polls again.
+  must(server, /if \(polling && pollPublished\) return polling\.then\(\(\) => pollAll\(\)\);/, "usage/server.mjs lets a late refresh join a poll that already published");
   must(server, /"\/api\/refresh" && req\.method === "POST"[\s\S]{0,200}pollAll\(\)/, "usage/server.mjs /api/refresh no longer polls");
   if (/set(?:Timeout|Interval)\([^)]*poll/i.test(server)) throw new Error("facts: usage/server.mjs polls on a timer again; the README says it does not");
   must(page, /load\(\)\.then\(\(\) => fetch\("\/api\/refresh"/, "usage/index.html no longer refreshes on page load");

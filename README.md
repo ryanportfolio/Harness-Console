@@ -161,7 +161,7 @@ When a row reads **Sign-in needed**, the row shows **Sign in again**, even when 
 
 ### Polling
 
-- There is no poll timer. Each login is fetched at startup, on every page load, on **Refresh now** and every 5 seconds during a sign-in watch. Refreshes that arrive while a poll runs share it.
+- There is no poll timer. Each login is fetched at startup, on every page load, on **Refresh now** and every 5 seconds during a sign-in watch. Refreshes that arrive while a poll runs share it. One that arrives after the poll has published its accounts, while it only saves them, waits for it and then polls again, so a refresh never answers with numbers fetched before it was asked.
 - A login that fetched fine less than 60 seconds ago, with no auth failure reported, keeps its numbers instead of being fetched again (a quota cooldown or upstream-error flag from the proxy does not change that), so a sign-in watch does not refetch every account every 5 seconds.
 - A 429 from a usage API parks that login for the response's Retry-After time, or 5 minutes without one. Polls in that time do not call the API for it; the first poll after it does. If the proxy rewrites the login's file in that time (a new sign-in, or a token refresh), the next poll calls the API once; another 429 parks it again.
 - The Claude plan comes from the profile endpoint, fetched after a login's usage call succeeds and then kept for as long as the tracker runs. A failed profile fetch is not kept, so the login's next successful usage fetch asks again.
