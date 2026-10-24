@@ -41,6 +41,13 @@
     "wrapup": "native",
     "writing": "native",
     "writing-plans": "native",
-    "deep-plan": "native"
+    "deep-plan": "native",
+    "apply-firmware": "native",
+    "cache-loop": "native",
+    "codex-image-gen": "disabled",
+    "coordinate": "disabled",
+    "design-prototypes": "native",
+    "redesign-concepts": "native",
+    "security-loop": "native"
   }
 }
