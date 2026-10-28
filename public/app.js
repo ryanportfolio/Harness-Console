@@ -189,7 +189,7 @@ function updateDestination() {
   const name = $('repoName').value.trim();
   $('newDestination').replaceChildren();
   if (!root) return;
-  const label = document.createElement('span'); label.textContent = 'CLONES TO '; const target = document.createElement('b'); target.textContent = root + (root.includes('\\') ? '\\' : '/') + (name || 'my-new-project'); $('newDestination').append(label, target);
+  const label = document.createElement('span'); label.textContent = $('repoLocalOnly').checked ? 'CREATES LOCALLY AT ' : 'CLONES TO '; const target = document.createElement('b'); target.textContent = root + (root.includes('\\') ? '\\' : '/') + (name || 'my-new-project'); $('newDestination').append(label, target);
 }
 // The job slot keeps the finished create until the next operation; once dismissed it must not repaint.
 let dismissedCreate = null;
@@ -207,21 +207,24 @@ function renderCreateJob(job) {
   const omitted = job.disabledSkills?.length || 0, total = catalog.loaded ? catalog.skills.length : null;
   $('successSummary').replaceChildren();
   const skillsLine = document.createElement('span'); skillsLine.textContent = total === null ? (omitted ? `${omitted} skills omitted. ` : '') : omitted ? `${total - omitted} skills included, ${omitted} omitted. ` : `All ${total} skills enabled. `;
-  const where = document.createElement('span'); where.textContent = 'Cloned to '; const target = document.createElement('b'); target.textContent = job.destination || ''; $('successSummary').append(skillsLine, where, target);
+  const where = document.createElement('span'); where.textContent = job.remoteUrl ? 'Cloned to ' : 'Local only, no GitHub repository. Created at '; const target = document.createElement('b'); target.textContent = job.destination || ''; $('successSummary').append(skillsLine, where, target);
 }
 async function resetCreator() {
   try { const { job } = await api('job'); if (job?.kind === 'create' && job.status !== 'running') dismissedCreate = createKey(job); } catch {}
   $('newSuccess').hidden = true; $('connection').hidden = false; $('newLog').hidden = true; $('newLog').textContent = ''; $('newError').textContent = '';
-  $('repoName').value = ''; $('repoDescription').value = ''; $('repoPrivate').checked = true; lastJobStatus = undefined; updateDestination(); renderConnection(); $('repoName').focus();
+  $('repoName').value = ''; $('repoDescription').value = ''; $('repoPrivate').checked = true; $('repoLocalOnly').checked = false; syncLocalOnly(); lastJobStatus = undefined; updateDestination(); renderConnection(); $('repoName').focus();
 }
 $('newForm').addEventListener('submit', async event => {
   event.preventDefault(); $('newError').textContent = '';
   const name = $('repoName').value.trim();
   if (!/^[A-Za-z0-9._-]{1,100}$/.test(name) || /^\.+$/.test(name)) { $('newError').textContent = 'Use letters, digits, dot, dash, or underscore.'; return; }
   setCreateState(true);
-  try { await api('create', { name, description: $('repoDescription').value.trim(), private: $('repoPrivate').checked, disabledSkills: disabledSkills() }); lastJobStatus = undefined; await poll(); }
+  try { await api('create', { name, description: $('repoDescription').value.trim(), private: $('repoPrivate').checked, localOnly: $('repoLocalOnly').checked, disabledSkills: disabledSkills() }); lastJobStatus = undefined; await poll(); }
   catch (error) { setCreateState(false); $('newError').textContent = error.message; }
 });
+// Local only has no GitHub repository, so the visibility choice does not apply.
+function syncLocalOnly() { $('repoPrivate').disabled = $('repoLocalOnly').checked; updateDestination(); }
+$('repoLocalOnly').addEventListener('change', syncLocalOnly);
 $('repoName').addEventListener('input', updateDestination);
 $('connectButton').onclick = () => { $('newError').textContent = ''; showTab('repos'); void start('login'); };
 $('createAnother').onclick = resetCreator;

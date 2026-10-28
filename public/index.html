@@ -15,6 +15,7 @@
         <div class="nf-field"><label for="repoName">Repository name</label><span class="input-shell"><input id="repoName" name="name" placeholder="my-new-project" pattern="[A-Za-z0-9._\-]+" maxlength="100" autocomplete="off" spellcheck="false" required><span class="type-cue" aria-hidden="true">TYPE<span></span></span></span></div>
         <div class="nf-field"><label for="repoDescription">Description <small>optional</small></label><span class="input-shell"><input id="repoDescription" name="description" maxlength="350" placeholder="What are you building" autocomplete="off"><span class="type-cue" aria-hidden="true">TYPE<span></span></span></span></div>
         <label class="visibility" for="repoPrivate"><input id="repoPrivate" name="private" type="checkbox" checked><span><strong>Private repository</strong><small>Recommended for a new project</small></span></label>
+        <label class="visibility" for="repoLocalOnly"><input id="repoLocalOnly" name="localOnly" type="checkbox"><span><strong>Local only</strong><small>Create the folder and a local git history with no GitHub repository</small></span></label>
         <button class="action go" type="submit" id="createButton" aria-busy="false"><span data-action-label>Create repository</span><span data-action-glyph aria-hidden="true">-&gt;</span></button>
         <p class="nf-destination" id="newDestination"></p>
       </form>

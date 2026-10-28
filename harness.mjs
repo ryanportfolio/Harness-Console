@@ -203,7 +203,8 @@ async function assertContract(destination, manifest) {
 
 // Creates a GitHub repository from the Harness Firmware template, clones it under root, strips
 // template-only files, drops a README stub, omits deselected skills, commits, and pushes.
-export async function createProject({ root, name, description = '', isPrivate = true, disabledSkills = [], catalog, template = TEMPLATE, execute = run, onOutput = () => {} }) {
+// localOnly skips GitHub: the template is copied into a fresh local repository with no remote.
+export async function createProject({ root, name, description = '', isPrivate = true, localOnly = false, disabledSkills = [], catalog, template = TEMPLATE, execute = run, onOutput = () => {} }) {
   validateLeaf(name);
   if (name.length > 100) throw new Error('Repository name is too long.');
   description = String(description ?? '').trim().slice(0, 350);
@@ -215,22 +216,33 @@ export async function createProject({ root, name, description = '', isPrivate = 
   if ((await readdir(resolvedRoot)).some(entry => entry.toLowerCase() === name.toLowerCase())) throw new Error(`Folder already exists: ${destination}. Choose another name or move that folder first.`);
 
   const git = (args, options = {}) => execute('git', ['-C', destination, ...args], options);
-  onOutput(`Creating ${isPrivate ? 'private' : 'public'} repository ${name} from ${template}…\n`);
-  const createArgs = ['repo', 'create', name, '--template', template, isPrivate ? '--private' : '--public', '--clone'];
-  if (description) createArgs.push('--description', description);
-  await execute('gh', createArgs, { cwd: resolvedRoot, onOutput });
-  if (!(await stat(destination).catch(() => null))?.isDirectory()) throw new Error(`GitHub reported success, but the clone was not found at ${destination}`);
+  if (localOnly) {
+    // A shallow clone of the template, then a new history, so the project starts with one commit and no remote.
+    onOutput(`Copying ${template} into a local-only repository ${name} (nothing is created on GitHub)…\n`);
+    await execute('gh', ['repo', 'clone', template, destination, '--', '--depth', '1', '-q'], { cwd: resolvedRoot, onOutput });
+    if (!(await stat(destination).catch(() => null))?.isDirectory()) throw new Error(`The template clone was not found at ${destination}`);
+    await rm(path.join(destination, '.git'), { recursive: true, force: true });
+    await execute('git', ['init', '-q', '-b', 'main', destination]);
+    await git(['add', '-A']);
+    await git(['commit', '-qm', 'Initial commit']);
+  } else {
+    onOutput(`Creating ${isPrivate ? 'private' : 'public'} repository ${name} from ${template}…\n`);
+    const createArgs = ['repo', 'create', name, '--template', template, isPrivate ? '--private' : '--public', '--clone'];
+    if (description) createArgs.push('--description', description);
+    await execute('gh', createArgs, { cwd: resolvedRoot, onOutput });
+    if (!(await stat(destination).catch(() => null))?.isDirectory()) throw new Error(`GitHub reported success, but the clone was not found at ${destination}`);
 
-  // GitHub generates template contents asynchronously; a fast clone can land before the first commit.
-  for (let attempt = 0; attempt < 12 && !await exists(path.join(destination, 'AGENTS.md')); attempt++) {
-    if (attempt === 0) onOutput('Waiting for GitHub to finish generating the repository…\n');
-    await sleep(1500);
-    try { await git(['fetch', '-q', 'origin']); await git(['checkout', '-q', '-B', 'main', '--track', 'origin/main']); } catch {}
+    // GitHub generates template contents asynchronously; a fast clone can land before the first commit.
+    for (let attempt = 0; attempt < 12 && !await exists(path.join(destination, 'AGENTS.md')); attempt++) {
+      if (attempt === 0) onOutput('Waiting for GitHub to finish generating the repository…\n');
+      await sleep(1500);
+      try { await git(['fetch', '-q', 'origin']); await git(['checkout', '-q', '-B', 'main', '--track', 'origin/main']); } catch {}
+    }
+    if (!await exists(path.join(destination, 'AGENTS.md'))) throw new Error(`Clone at ${destination} never received the template contents. Inspect the folder and the repository on GitHub before retrying.`);
   }
-  if (!await exists(path.join(destination, 'AGENTS.md'))) throw new Error(`Clone at ${destination} never received the template contents. Inspect the folder and the repository on GitHub before retrying.`);
 
   // The clone's own manifest decides the strip, so it matches the files actually cloned.
-  const untouched = `The repository ${name} was created on GitHub, but nothing was committed or pushed. Delete it or fix it by hand.`;
+  const untouched = localOnly ? `The folder ${destination} holds only the template copy. Delete it or fix it by hand.` : `The repository ${name} was created on GitHub, but nothing was committed or pushed. Delete it or fix it by hand.`;
   let manifestText;
   try { manifestText = await readFile(path.join(destination, MANIFEST_PATH), 'utf8'); }
   catch { throw new Error(`The new clone has no ${MANIFEST_PATH}, so the Console cannot tell which template files to strip. ${untouched}`); }
@@ -276,6 +288,10 @@ export async function createProject({ root, name, description = '', isPrivate = 
     await git(['commit', '-qm', 'Configure Harness skills']);
   }
 
+  if (localOnly) {
+    onOutput(`Ready. ${destination} is a local-only repository with no remote.\n`);
+    return { destination, remoteUrl: null, disabledSkills: disabled };
+  }
   onOutput('Pushing to GitHub…\n');
   await git(['push', '-q'], { onOutput });
   const remote = (await git(['remote', 'get-url', 'origin'])).trim().replace(/\.git$/, '');
