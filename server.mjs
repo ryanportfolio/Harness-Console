@@ -146,7 +146,7 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
         if (typeof body.name !== 'string' || !/^[A-Za-z0-9._-]{1,100}$/.test(body.name) || /^\.+$/.test(body.name)) throw new Error('Use letters, digits, dot, dash, or underscore for the repository name.');
         if (body.description !== undefined && typeof body.description !== 'string') throw new Error('Description must be text.');
         if (body.disabledSkills !== undefined && !Array.isArray(body.disabledSkills)) throw new Error('Choose skills from the available list.');
-        request = { name: body.name, description: body.description ?? '', isPrivate: body.private !== false, disabledSkills: body.disabledSkills ?? [] };
+        request = { name: body.name, description: body.description ?? '', isPrivate: body.private !== false, localOnly: body.localOnly === true, disabledSkills: body.disabledSkills ?? [] };
       }
       job = { kind, id: kind === 'create' ? request.name : body.id || null, status: 'running', log: '', destination: null, remoteUrl: null, disabledSkills: null, results: null };
       const active = job;
