@@ -118,7 +118,7 @@ const disabledSkills = () => catalog.skills.filter(skill => !catalog.state.get(s
 function setConnection(title, copy, connected = false) {
   $('connection').classList.toggle('connected', connected);
   $('connection').querySelector('strong').textContent = title;
-  $('connection').querySelector('p').textContent = copy;
+  $('connection').querySelector('p').textContent = copy; $('connection').querySelector('p').hidden = !copy;
 }
 function setCreateState(next) {
   creating = next;
@@ -181,7 +181,7 @@ function renderConnection() {
     setConnection(account?.needsLogin === false ? 'GitHub CLI unavailable' : 'GitHub connection needed', account?.needsLogin === false ? (account.error || 'Check the GitHub CLI and refresh') : 'Sign in once through the GitHub CLI, then projects are one click');
     $('newForm').hidden = true; $('newFallback').hidden = false; $('skillTrigger').hidden = true; return;
   }
-  setConnection(`Connected as ${account.login}`, 'Choose the repository details and active skill set', true);
+  setConnection(`Connected as ${account.login}`, '', true);
   $('newFallback').hidden = true; $('newForm').hidden = $('newSuccess').hidden === false; $('skillTrigger').hidden = false;
   void loadSkills();
 }
