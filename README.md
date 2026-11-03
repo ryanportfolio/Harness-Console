@@ -61,8 +61,6 @@ A repository can lock a skill so syncs leave it alone. **Lock** next to a skill 
 
 Some repositories are never synced. Each one is paused under `projects` in the settings file with a reason, such as a frozen job take-home or a repository with no firmware files; the first start imports the list Harness Console kept in `sync-skip.json`. Repositories archived on GitHub are skipped too; each Harness clone is looked up with `gh api repos/<owner>/<name>`. Skipped repositories appear on the tab with their reason, offer no skills to pick, and the server refuses them. When that lookup fails, or the repository's default branch is not `main`, the repository shows the error and cannot be synced.
 
-**Stale in worktrees** lists each checkout of a clone, the clone folder itself and every linked Git worktree, whose committed skill copies are an older template version than the repository's main. A session loads skills from its own checkout, so a branch cut before a skill sync keeps the old copies even when main is current. The list only reads Git metadata. Merge main into the branch to update it; copies edited in the branch are not listed.
-
 ### DSH skills
 
 Installs skills from the Harness-Firmware clone at `~/CoreWise/Harness-Firmware` into DSH's global skill folder, `~/.dsh/skills` (the `DSH_HOME` environment variable moves `~/.dsh`). Skills are read from that clone's `origin/main` after a fetch, so uncommitted and untracked files in the working folder never travel. Files that may hold secrets, caches and generated output are reported and skipped.
