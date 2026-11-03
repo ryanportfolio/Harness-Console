@@ -148,7 +148,7 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
         if (body.disabledSkills !== undefined && !Array.isArray(body.disabledSkills)) throw new Error('Choose skills from the available list.');
         request = { name: body.name, description: body.description ?? '', isPrivate: body.private !== false, localOnly: body.localOnly === true, disabledSkills: body.disabledSkills ?? [] };
       }
-      job = { kind, id: kind === 'create' ? request.name : body.id || null, status: 'running', log: '', destination: null, remoteUrl: null, disabledSkills: null, results: null };
+      job = { kind, id: kind === 'create' ? request.name : body.id || null, status: 'running', log: '', destination: null, remoteUrl: null, disabledSkills: null, results: null, progress: null };
       const active = job;
       const output = text => { active.log = (active.log + text).slice(-24000); };
       const work = async () => {
@@ -163,7 +163,15 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
             try { active.results = [await lockSkill({ root, ...request, skip, onOutput: output })]; }
             catch (error) { active.results = error.branch ? [{ id: request.id, result: 'failed', error: error.message, branch: error.branch, ...(error.url && { url: error.url }) }] : null; throw error; }
           } else if (kind === 'sync') {
-            try { active.results = await sync({ root, selection: request, skip, onOutput: output }); }
+            // One row per picked repository; a row without a result is still waiting or running.
+            // A failed row keeps the step it failed in as `failedAt`. `steps` and `endedAt` are epoch ms, for step times.
+            active.progress = request.map(item => ({ id: item.id, skills: item.apply.length + item.remove.length + item.replace.length, step: null, steps: [], result: null }));
+            const onProgress = (id, update) => {
+              const row = active.progress.find(entry => entry.id === id); if (!row) return;
+              if (update.result) Object.assign(row, update, { step: null, endedAt: Date.now() }, update.result === 'failed' && row.step ? { failedAt: row.step } : {});
+              else { row.step = update.step; row.steps.push({ name: update.step, at: Date.now() }); }
+            };
+            try { active.results = await sync({ root, selection: request, skip, onOutput: output, onProgress }); }
             catch (error) { active.results = error.results ?? null; throw error; }
           } else if (kind === 'create') {
             const result = await create({ root, ...request, catalog: await loadSkills(), onOutput: output });
