@@ -531,7 +531,7 @@ async function applySync() {
 // A rejected request has no job: drop the previous job's results and show the error in the open log.
 function showSyncError(title, message) {
   $('syncActivity').hidden = false; $('syncActivityTitle').textContent = title; $('syncJobState').textContent = '';
-  $('syncMeter').hidden = true; $('syncResults').hidden = true; syncView.key = ''; $('syncLogBox').open = true; $('syncLog').textContent = message;
+  $('syncMeter').hidden = true; $('syncResults').hidden = true; syncView.key = ''; syncView.listKey = ''; $('syncLogBox').open = true; $('syncLog').textContent = message;
 }
 // Links only to GitHub pull request pages, the one kind of url sync.mjs returns.
 function prLink(item, text) {
@@ -566,7 +566,7 @@ const copyButton = (id, text) => { const button = el('button', 'quiet copy', tex
 function renderSyncRows(rows, done, log) {
   syncView.rows = rows; syncView.done = done; syncView.log = log;
   drawSync();
-  return { failed: rows.filter(row => row.result === 'failed').length };
+  return { failed: rows.filter(row => row.result === 'failed').length, succeeded: rows.filter(row => row.result === 'merged' || row.result === 'current').length };
 }
 function drawSync() {
   const { rows, done } = syncView;
@@ -580,18 +580,26 @@ function drawSync() {
   // The reader's pick stays; without one, the first failure, else the running repository, else the first.
   const picked = sorted.find(row => row.id === syncView.pick) ?? sorted[0];
   const running = picked && syncState(picked) === 'running';
-  const key = JSON.stringify([rows, done, picked?.id, picked && repoLog(picked.id), running && Math.floor(Date.now() / 1000)]);
-  if (key === syncView.key) return; syncView.key = key;
-  $('syncTally').replaceChildren(`${finished} of ${count(rows.length, 'repository', 'repositories')} done`,
-    ...[[tally.merged, 'merged'], [tally.current, 'already current'], [tally.failed, 'failed']].filter(([n]) => n).map(([n, label]) => el('span', label === 'failed' ? 'bad' : '', `${n} ${label}`)),
-    tally.failed ? copyButton('all', tally.failed > 1 ? `Copy all ${tally.failed} failures` : 'Copy failure') : null);
-  const line = row => ({ failed: row.error || 'Failed; see the full log.', running: `${row.step}…`, waiting: row.skills ? count(row.skills, 'skill', 'skills') : '', skipped: 'Not started', merged: row.url ? `#${row.url.split('/').pop()}` : '', current: '' })[syncState(row)];
-  $('syncList').replaceChildren(...sorted.map(row => {
-    const item = el('li', `sync-item ${syncState(row)}${row === picked ? ' picked' : ''}`, el('span', 'mark', ''),
-      el('span', 'name', el('strong', '', row.id.split('/')[1]), el('span', 'line', line(row))), el('span', 'state', SYNC_ROW[syncState(row)][0]));
-    item.dataset.id = row.id; item.tabIndex = 0; if (row === picked) item.setAttribute('aria-current', 'true');
-    return item;
-  }));
+  // The list redraws only when a row changes; the detail also redraws each second while its step's time runs.
+  const listKey = JSON.stringify([rows, done, picked?.id]);
+  const detailKey = JSON.stringify([listKey, picked && repoLog(picked.id), running && Math.floor(Date.now() / 1000)]);
+  if (detailKey === syncView.key) return; syncView.key = detailKey;
+  if (listKey !== syncView.listKey) {
+    syncView.listKey = listKey;
+    $('syncTally').replaceChildren(...[`${finished} of ${count(rows.length, 'repository', 'repositories')} done`,
+      ...[[tally.merged, 'merged'], [tally.current, 'already current'], [tally.failed, 'failed']].filter(([n]) => n).map(([n, label]) => el('span', label === 'failed' ? 'bad' : '', `${n} ${label}`)),
+      tally.failed ? copyButton('all', tally.failed > 1 ? `Copy all ${tally.failed} failures` : 'Copy failure') : null].filter(Boolean));
+    const line = row => ({ failed: row.error || 'Failed; see the full log.', running: `${row.step}…`, waiting: row.skills ? count(row.skills, 'skill', 'skills') : '', skipped: 'Not started', merged: row.url ? `#${row.url.split('/').pop()}` : '', current: '' })[syncState(row)];
+    // A redraw replaces the items, so the focused one gets focus back by its id.
+    const focused = document.activeElement?.closest?.('#syncList li[data-id]')?.dataset.id;
+    $('syncList').replaceChildren(...sorted.map(row => {
+      const item = el('li', `sync-item ${syncState(row)}${row === picked ? ' picked' : ''}`, el('span', 'mark', ''),
+        el('span', 'name', el('strong', '', row.id.split('/')[1]), el('span', 'line', line(row))), el('span', 'state', SYNC_ROW[syncState(row)][0]));
+      item.dataset.id = row.id; item.tabIndex = 0; if (row === picked) item.setAttribute('aria-current', 'true');
+      return item;
+    }));
+    if (focused) [...$('syncList').children].find(item => item.dataset.id === focused)?.focus();
+  }
   $('syncDetail').replaceChildren(...(picked ? syncDetail(picked) : []));
   $('syncResults').hidden = !rows.length;
 }
@@ -628,15 +636,16 @@ function renderSyncJob(job) {
   $('syncActivity').hidden = false;
   const lock = job.kind === 'sync-lock', done = job.status !== 'running';
   const rows = job.progress ?? (done ? job.results : null) ?? [];
-  const { failed } = renderSyncRows(rows, done, job.log || ''), total = rows.length;
+  const { failed, succeeded } = renderSyncRows(rows, done, job.log || ''), total = rows.length;
   const many = !lock && total > 1;
   $('syncActivityTitle').textContent = !done ? (lock ? 'Updating skill lock' : 'Syncing skills')
     : job.status === 'complete' ? (lock ? 'Skill lock updated' : many ? `${count(total, 'repository', 'repositories')} synced` : 'Skills synced')
     : many && failed ? `${failed} of ${count(total, 'repository', 'repositories')} failed` : lock ? 'Lock needs attention' : 'Sync needs attention';
-  $('syncJobState').textContent = !done ? 'In progress' : job.status === 'complete' ? 'Complete' : many && failed < total ? `${total - failed} succeeded` : 'Failed';
+  $('syncJobState').textContent = !done ? 'In progress' : job.status === 'complete' ? 'Complete' : many && succeeded ? `${succeeded} succeeded` : 'Failed';
   setLog($('syncLog'), job.log || 'Starting…');
-  // The log stays folded behind the rows; it opens on its own only when there are no rows to show.
-  if (job.status !== lastJobStatus) $('syncLogBox').open = $('syncResults').hidden;
+  // The log stays folded behind the rows. It opens on its own when there are no rows, or when the job
+  // failed with no repository failing (the template fetch, say): then only the log holds the error.
+  if (job.status !== lastJobStatus) $('syncLogBox').open = $('syncResults').hidden || job.status === 'failed' && !failed;
   $('syncScan').disabled = busy || sync.scanning; renderSyncFoot();
   if (job.status !== 'running' && lastJobStatus === 'running') void scanSync();
 }
