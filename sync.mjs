@@ -134,7 +134,8 @@ export function parseTree(text) {
 // not a skill, so a sync neither adds it to a repository nor removes it from one.
 async function skillTrees(git, rev, { skillsOnly = false } = {}) {
   const trees = Object.fromEntries(PARTS.map(part => [part, new Map()])); trees.odd = new Set();
-  const skills = skillsOnly && new Set((await git(['ls-tree', '-r', '-z', '--name-only', rev, '--', ...PARTS.map(part => `${part}/`)]).catch(() => ''))
+  // No fallback here: an unreadable list would make every template skill look retired.
+  const skills = skillsOnly && new Set((await git(['ls-tree', '-r', '-z', '--name-only', rev, '--', ...PARTS.map(part => `${part}/`)]))
     .split('\0').filter(file => /^[^/]+\/skills\/[^/]+\/SKILL\.md$/.test(file)).map(file => file.slice(0, -'/SKILL.md'.length)));
   for (const entry of parseTree(await git(['ls-tree', '-z', rev, ...PARTS.map(part => `${part}/`)]).catch(() => ''))) {
     const part = PARTS.find(prefix => entry.path.startsWith(`${prefix}/`)); const name = entry.path.slice(part.length + 1);
@@ -166,15 +167,16 @@ export async function openTemplate({ cache = TEMPLATE_CACHE, source = `https://g
   for (let index = 0; index < commits.length; index += 8) {
     await Promise.all(commits.slice(index, index + 8).map(async commit => { if (!commitTrees.has(commit)) commitTrees.set(commit, await skillTrees(git, commit)); }));
   }
-  // Only names that held a SKILL.md at some point have a history. Every tree of such a name counts,
+  // Only folders that held a SKILL.md at some point have a history, per root (a Codex skill's SKILL.md
+  // says nothing about a hooks-only Claude folder of the same name). Every tree of such a folder counts,
   // including a retired skill's leftover folder after its SKILL.md went, so a repository still holding
   // that leftover reads as untouched. A folder that never had one (hooks only) is never a skill.
   const everSkill = new Set((await git(['log', '--format=', '--name-only', head, '--', ...PARTS])).split(/\r?\n/)
-    .map(file => /^[^/]+\/skills\/([^/]+)\/SKILL\.md$/.exec(file.trim())?.[1]).filter(Boolean));
+    .map(file => /^([^/]+\/skills\/[^/]+)\/SKILL\.md$/.exec(file.trim())?.[1]).filter(Boolean));
   // age: how recent each tree is, as the index of the newest commit holding it (0 = head).
   const age = Object.fromEntries(PARTS.map(part => [part, new Map()]));
   commits.forEach((commit, index) => { for (const part of PARTS) for (const [name, sha] of commitTrees.get(commit)[part]) {
-    if (!everSkill.has(name)) continue;
+    if (!everSkill.has(`${part}/${name}`)) continue;
     if (!history[part].has(name)) { history[part].set(name, new Set()); age[part].set(name, new Map()); }
     history[part].get(name).add(sha);
     if (!age[part].get(name).has(sha)) age[part].get(name).set(sha, index);

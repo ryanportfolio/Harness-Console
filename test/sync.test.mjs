@@ -119,6 +119,18 @@ test('a template folder without SKILL.md is not a skill, so a sync never copies 
   assert.ok(!files.includes('smart-compact'));
 });
 
+test('a Codex skill SKILL.md does not make a hooks-only Claude folder of the same name a retired skill', async t => {
+  const data = await fixture(t);
+  const template = path.join(data.temp, 'template');
+  await put(template, '.claude/skills/helper/hooks/run.sh', 'echo\n'); await put(template, '.agents/skills/helper/SKILL.md', 'helper codex\n');
+  await commit(template, 'helper');
+  const work = path.join(data.temp, 'work'); await run('git', ['clone', '-q', data.remote, work]);
+  await put(work, '.claude/skills/helper/hooks/run.sh', 'echo\n'); await commit(work, 'helper hooks');
+  await run('git', ['-C', work, 'push', '-q', 'origin', 'HEAD:main']);
+  const [repo] = (await scanSkills({ root: data.root, execute: data.execute, template: await data.opened() })).repos;
+  assert.ok(!repo.skills.some(skill => skill.name === 'helper' && ['removed', 'removed-edited'].includes(skill.status)));
+});
+
 test('a retired skill whose SKILL.md went before the rest of its folder still reads as untouched', async t => {
   const data = await fixture(t);
   const template = path.join(data.temp, 'template');
