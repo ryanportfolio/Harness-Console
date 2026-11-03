@@ -68,9 +68,31 @@
 .compare-raw{margin-top:10px;font-size:14px}.compare-raw summary{cursor:pointer;color:var(--bronze)}
 .compare-raw pre{font:12px/1.5 Consolas,"Cascadia Mono",ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0}
 @media(max-width:760px){.compare-cards{grid-template-columns:1fr}.compare-arrow{flex-direction:row;gap:8px}}
-.sync-results{margin-top:14px}.sync-result{display:grid;grid-template-columns:190px minmax(0,1fr);gap:20px;padding:12px 0;border-top:1px solid var(--wheat)}.sync-result:first-child{border-top:0;padding-top:0}
-.sync-result h3{margin:0;font-size:14px;font-weight:400;letter-spacing:.06em;text-transform:uppercase;color:var(--bronze)}.sync-result.failed h3{color:#a04030}
-.sync-result ul{list-style:none;margin:0;padding:0;font-size:15px;line-height:1.6}.sync-result li+li{margin-top:6px}.sync-result.failed li{border-left:4px solid #a04030;padding-left:12px}.sync-result.failed li+li{margin-top:12px}
-.sync-result strong{font-weight:500}.sync-result a{color:inherit}.sync-result .why{display:block;color:var(--ink);overflow-wrap:anywhere}.sync-result p{margin:0;font-size:15px;line-height:1.6;overflow-wrap:anywhere}
-.sync-log{margin-top:14px;font-size:14px}.sync-log summary{cursor:pointer;color:var(--bronze)}.sync-log pre{margin-top:8px}
-@media(max-width:760px){.sync-result{grid-template-columns:1fr;gap:6px}}
+/* Sync progress sits above the repository list. */
+.sync-activity{margin:0 0 30px}
+.sync-meter{margin-top:14px}.sync-bar{display:flex;height:6px;background:var(--wheat)}.sync-bar span{display:block;width:0;transition:width .3s}#syncBarDone{background:var(--ink)}#syncBarFailed{background:#a04030}
+.sync-tally{display:flex;flex-wrap:wrap;gap:4px 18px;margin:10px 0 0;font-size:15px}.sync-tally span{color:var(--bronze)}.sync-tally .bad{color:#a04030;font-weight:500}
+.sync-log{margin-top:14px;font-size:14px}.sync-log summary{cursor:pointer;color:var(--bronze)}.sync-log pre{margin-top:8px;max-height:320px}
+
+/* Picks 3 + 8: the header carries the verdict, bar and tally; below it a list of repositories and the picked one in full. */
+.sync-tally .copy{margin-left:auto;color:#a04030;font-size:14px}
+.sync-split{display:grid;grid-template-columns:minmax(260px,380px) minmax(0,1fr);gap:0 32px;margin-top:18px;border-top:1px solid var(--wheat)}
+.sync-list{list-style:none;margin:0;padding:0;max-height:560px;overflow:auto;border-right:1px solid var(--wheat)}
+.sync-item{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:12px;align-items:baseline;padding:9px 14px 9px 10px;border-bottom:1px solid var(--wheat);border-left:3px solid transparent;cursor:pointer;font-size:15px;line-height:1.4}
+.sync-item:hover{background:var(--linen)}.sync-item.picked{background:var(--linen);border-left-color:var(--ink)}.sync-item:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
+.sync-item .name{min-width:0}.sync-item strong{display:block;font-weight:500;overflow-wrap:anywhere}.sync-item .line{display:block;font-size:13px;color:var(--bronze);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sync-item .state,.sync-detail .state{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--bronze);white-space:nowrap}
+.sync-activity .mark{display:block;width:9px;height:9px;border:1px solid var(--ink)}.sync-item .mark{align-self:center}
+.sync-item.waiting,.sync-item.skipped{color:var(--bronze)}.sync-item.waiting .mark,.sync-item.skipped .mark,.step.off .mark{border-color:var(--hay)}
+.sync-item.running .mark,.step.now .mark{background:var(--ink);animation:sync-pulse 1s ease-in-out infinite alternate}.sync-item.running .state{color:var(--ink)}
+.sync-item.merged .mark,.step.ok .mark{background:var(--ink)}.sync-item.current .mark{background:var(--hay);border-color:var(--hay)}
+.sync-item.failed{border-left-color:#a04030}.sync-item.failed .mark,.step.bad .mark{background:#a04030;border-color:#a04030}.sync-item.failed .state,.sync-item.failed .line,.sync-detail .state.failed{color:#a04030}
+.sync-detail{padding:14px 0 10px;min-width:0}.detail-head{display:flex;justify-content:space-between;align-items:baseline;gap:16px}.detail-head h3{margin:0;font-size:22px;font-weight:500;overflow-wrap:anywhere}
+.sync-detail .headline{margin:12px 0 0;font-size:17px;line-height:1.5;color:#a04030;overflow-wrap:anywhere}.sync-detail .where{margin:6px 0 0;font-size:14px;color:var(--bronze);overflow-wrap:anywhere}.sync-detail a{color:inherit}
+.sync-detail .copy-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;margin:12px 0 0;font-size:13px;color:var(--bronze)}.sync-detail .copy-line .copy{font-size:15px;color:var(--ink)}
+.sync-detail h4{margin:20px 0 6px;font-size:12px;font-weight:400;letter-spacing:.08em;text-transform:uppercase;color:var(--bronze)}
+.steps{list-style:none;margin:0;padding:0;font-size:14px}.step{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:12px;align-items:center;padding:5px 0;border-bottom:1px solid var(--wheat)}
+.step.off{color:var(--bronze)}.step.bad{color:#a04030;font-weight:500}.step .time{font-size:13px;color:var(--bronze);font-variant-numeric:tabular-nums}
+.sync-detail .repo-log{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 var(--sans);color:var(--ink);border-left:3px solid var(--wheat);padding-left:12px}
+@keyframes sync-pulse{to{opacity:.25}}@media(prefers-reduced-motion:reduce){.sync-item.running .mark,.step.now .mark{animation:none}.sync-bar span{transition:none}}
+@media(max-width:900px){.sync-split{grid-template-columns:1fr}.sync-list{border-right:0;max-height:320px}}

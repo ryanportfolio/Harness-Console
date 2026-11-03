@@ -44,11 +44,11 @@
 </div>
 <div id="syncView" role="tabpanel" hidden>
   <div class="sync-head"><div><div class="eyebrow" id="syncTemplate">Harness-Firmware main</div><h1>Skill sync</h1></div><button id="syncScan" class="primary" type="button">Check repositories <span>↻</span></button></div>
+  <section id="syncActivity" class="activity sync-activity" hidden><div class="activity-heading"><h2 id="syncActivityTitle">Syncing skills</h2><span id="syncJobState" class="pill"></span></div><div id="syncMeter" class="sync-meter" hidden><div class="sync-bar" aria-hidden="true"><span id="syncBarDone"></span><span id="syncBarFailed"></span></div><p id="syncTally" class="sync-tally" aria-live="polite"></p></div><div id="syncResults" class="sync-split" hidden><ol id="syncList" class="sync-list"></ol><div id="syncDetail" class="sync-detail" aria-live="polite"></div></div><details id="syncLogBox" class="sync-log"><summary>Full log</summary><pre id="syncLog" tabindex="0"></pre></details></section>
   <div id="syncTools" class="sync-tools" hidden><button id="syncSelectAll" class="quiet" type="button">Select all updates, additions and edited</button><button id="syncClearAll" class="quiet" type="button">Unselect all</button></div>
   <div id="syncRepos"></div>
   <dialog id="syncCompare" class="sync-compare" aria-labelledby="syncCompareTitle"><div class="activity-heading"><h2 id="syncCompareTitle">Compare</h2><button id="syncCompareClose" class="quiet" type="button">Close</button></div><div id="syncStory" class="compare-story"></div><div id="syncDiff" class="compare-diff" tabindex="0"></div></dialog>
   <div id="syncFoot" class="sync-foot" hidden><span id="syncSummary"></span><button id="syncApply" class="primary" type="button">Sync and merge <span>↑</span></button></div>
-  <section id="syncActivity" class="activity" hidden aria-live="polite"><div class="activity-heading"><h2 id="syncActivityTitle">Syncing skills</h2><span id="syncJobState" class="pill"></span></div><div id="syncResults" class="sync-results" hidden></div><details id="syncLogBox" class="sync-log" open><summary>Full log</summary><pre id="syncLog" tabindex="0"></pre></details></section>
 </div>
 <div id="dshView" role="tabpanel" hidden>
   <div class="sync-head"><div><div class="eyebrow" id="dshSource">Harness-Firmware main</div><h1>DSH skills</h1></div><button id="dshScan" class="primary" type="button">Check DSH skills <span>↻</span></button></div>

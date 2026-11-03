@@ -80,7 +80,9 @@ export function readBlobs(cache, shas) {
   });
 }
 // A failed Node script's stderr starts with its stack location; the useful line names the error.
-const reason = error => { const lines = String(error.message).split(/\r?\n/).map(line => line.trim()).filter(Boolean); return (lines.find(line => /^\w*Error:/.test(line)) ?? lines[0] ?? 'unknown error').replace(/^Error:\s*/, ''); };
+// A tool's stderr often opens with progress lines (a commit hook's scanner prints what it indexed),
+// so a line that says what failed wins over the first line.
+const reason = error => { const lines = String(error.message).split(/\r?\n/).map(line => line.trim()).filter(Boolean); return (lines.find(line => /^\w*Error:/.test(line)) ?? lines.find(line => /\bFAIL\b|\bfailed\b|\bblocked\b/i.test(line)) ?? lines[0] ?? 'unknown error').replace(/^Error:\s*/, ''); };
 
 // Repositories a sync must never write, such as a frozen take-home. The list ships with the app;
 // one that cannot be read stops the sync instead of letting it write everywhere.
@@ -565,7 +567,8 @@ function removedSummary(result) {
 
 // Pushes the worktree's commit to a new branch, opens a pull request into main and squash-merges it.
 // Main is never pushed to directly. Returns { branch, url }; a failure after the push carries them.
-async function mergeCommit({ git, execute, worktree, github, commit, base, title, body, say }) {
+async function mergeCommit({ git, execute, worktree, github, commit, base, title, body, say, step = () => {} }) {
+  step('Opening pull request');
   const branch = await freeBranch(git, base);
   // A plain push of a new branch: it never moves main and never overwrites an existing branch.
   await git([...GIT_CRED, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`]);
@@ -575,6 +578,7 @@ async function mergeCommit({ git, execute, worktree, github, commit, base, title
   catch (error) { throw Object.assign(new Error(`Pushed branch ${branch}, but could not open the pull request: ${reason(error)}. Open it on GitHub by hand.`), { branch }); }
   const url = String(out).split(/\r?\n/).map(line => line.trim()).find(line => /^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+$/.test(line)) ?? null;
   if (!url) throw Object.assign(new Error(`Opened a pull request from ${branch}, but gh printed no link to merge. Merge it on GitHub by hand.`), { branch });
+  step('Merging');
   // Squash-merged straight away, pinned to the commit the checks ran on. A merge GitHub refuses
   // (branch protection, required checks, a conflict with a newer main, a branch that moved since
   // the push) leaves the pull request open and fails this repository.
@@ -597,14 +601,16 @@ async function mergeCommit({ git, execute, worktree, github, commit, base, title
 
 // Applies one repository's selection in a temporary worktree on origin/main, pushes it to a new
 // branch, opens a pull request into main and squash-merges it. Main is never pushed to directly.
-async function applyRepo({ template, clone, skipList, apply, remove, replace, execute, onOutput }) {
+async function applyRepo({ template, clone, skipList, apply, remove, replace, execute, onOutput, step }) {
   const say = text => onOutput(`${clone.id}: ${text}\n`);
+  step('Checking GitHub');
   const github = await githubState(clone.id, execute);
   // The skip list also matches the name GitHub reports, which follows a rename the origin may still use.
   const listed = github.name ? skipReason(skipList, github.name) : null;
   if (listed !== null) throw new Error(`Skipped: ${listed}. Nothing was written.`);
   if (github.skipped) throw new Error(`Skipped: ${github.skipped}. Nothing was written.`);
   if (github.blocked) throw new Error(github.blocked);
+  step('Fetching main');
   await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
   const head = (await execute('git', ['-C', clone.folder, 'rev-parse', 'origin/main'])).trim();
   const { skills, nativeCopies } = await compareRepo({ template, folder: clone.folder, rev: head, execute });
@@ -622,6 +628,7 @@ async function applyRepo({ template, clone, skipList, apply, remove, replace, ex
   const worktree = path.join(temp, 'work');
   const git = args => execute('git', ['-C', worktree, ...args]);
   try {
+    step('Writing skills');
     await execute('git', ['-C', clone.folder, 'worktree', 'add', '--quiet', '--detach', worktree, head]);
     const script = name => path.join(worktree, '.claude', 'scripts', name);
     const has = Object.fromEntries(await Promise.all(['sync-codex-skills.mjs', 'test-codex-contract.mjs', 'removed-skills.mjs'].map(async name => [name, await exists(script(name))])));
@@ -642,6 +649,7 @@ async function applyRepo({ template, clone, skipList, apply, remove, replace, ex
 
     // A check that passed on main must still pass after the change, or nothing is committed or pushed.
     // One already failing on main is reported in the pull request; its own CI shows the rest.
+    step('Running checks');
     const checks = [];
     const judge = (label, was, now) => {
       if (now.ok) { checks.push(`- ${label}: ${was.ok ? 'passed on main and after this change' : 'failed on main, passes after this change'}`); return; }
@@ -674,7 +682,7 @@ async function applyRepo({ template, clone, skipList, apply, remove, replace, ex
     await git(['commit', '-q', '-m', PR_TITLE, '-m', [...changes, source].join('\n')]);
     const commit = (await git(['rev-parse', 'HEAD'])).trim();
     const body = [...changes, source, '', 'Checks run on this change in a temporary checkout of main before it was committed:', ...checks, '', 'Opened by Harness Console skill sync.'].join('\n');
-    const { branch, url } = await mergeCommit({ git, execute, worktree, github, commit, base: `harness-sync/${template.head.slice(0, 7)}`, title: PR_TITLE, body, say });
+    const { branch, url } = await mergeCommit({ git, execute, worktree, github, commit, base: `harness-sync/${template.head.slice(0, 7)}`, title: PR_TITLE, body, say, step });
     say(`merged ${url} (${changes.join('; ')})`);
     return { id: clone.id, result: 'merged', commit, branch, url };
   } finally {
@@ -712,17 +720,19 @@ async function removeWorktree(folder, temp, worktree, execute, say) {
 // selection: [{ id, apply: [skill], remove: [skill], replace: [{ name, trees }] }]. Every choice is re-checked against a fresh
 // fetch, so a skill edited on GitHub since the scan is skipped rather than overwritten. The skip list
 // and GitHub's archived flag are checked again here, whatever the scan said.
-export async function applySkills({ root, selection, execute = run, template: opened, cache, source, skip, onOutput = () => {} }) {
+// onProgress(id, { step }) names the step a repository is on; onProgress(id, result) reports its outcome.
+export async function applySkills({ root, selection, execute = run, template: opened, cache, source, skip, onOutput = () => {}, onProgress = () => {} }) {
   const skipList = skip ?? await readSkipList();
   const template = opened ?? await openTemplate({ cache, source, execute, onOutput });
   const clones = new Map((await findClones({ root, execute })).map(clone => [clone.id, clone]));
   const results = [];
+  const done = result => { results.push(result); onProgress(result.id, result); };
   for (const { id, apply = [], remove = [], replace = [] } of selection) {
     const clone = clones.get(id), listed = skipReason(skipList, id);
-    if (!clone) { results.push({ id, result: 'failed', error: 'No clone in the CoreWise folder.' }); onOutput(`${id}: no clone in the CoreWise folder\n`); continue; }
-    if (listed !== null) { results.push({ id, result: 'failed', error: `Skipped: ${listed}.` }); onOutput(`${id}: skipped, ${listed}; nothing written\n`); continue; }
-    try { results.push(await applyRepo({ template, clone, skipList, apply, remove, replace, execute, onOutput })); }
-    catch (error) { const message = reason(error); results.push({ id, result: 'failed', error: message, ...(error.branch && { branch: error.branch }), ...(error.url && { url: error.url }) }); onOutput(`${id}: failed${error.branch ? '' : ', nothing pushed'}. ${message}\n`); }
+    if (!clone) { done({ id, result: 'failed', error: 'No clone in the CoreWise folder.' }); onOutput(`${id}: no clone in the CoreWise folder\n`); continue; }
+    if (listed !== null) { done({ id, result: 'failed', error: `Skipped: ${listed}.` }); onOutput(`${id}: skipped, ${listed}; nothing written\n`); continue; }
+    try { done(await applyRepo({ template, clone, skipList, apply, remove, replace, execute, onOutput, step: step => onProgress(id, { step }) })); }
+    catch (error) { const message = reason(error); done({ id, result: 'failed', error: message, ...(error.branch && { branch: error.branch }), ...(error.url && { url: error.url }) }); onOutput(`${id}: failed${error.branch ? '' : ', nothing pushed'}. ${message}\n`); }
   }
   const failed = results.filter(result => result.result === 'failed');
   if (failed.length) throw Object.assign(new Error(`${failed.length} of ${results.length} repositories failed: ${failed.map(result => result.id).join(', ')}`), { results });
