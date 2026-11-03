@@ -81,8 +81,13 @@ export function readBlobs(cache, shas) {
 }
 // A failed Node script's stderr starts with its stack location; the useful line names the error.
 // A tool's stderr often opens with progress lines (a commit hook's scanner prints what it indexed),
-// so a line that says what failed wins over the first line.
-const reason = error => { const lines = String(error.message).split(/\r?\n/).map(line => line.trim()).filter(Boolean); return (lines.find(line => /^\w*Error:/.test(line)) ?? lines.find(line => /\bFAIL\b|\bfailed\b|\bblocked\b/i.test(line)) ?? lines[0] ?? 'unknown error').replace(/^Error:\s*/, ''); };
+// so a line that says what failed wins over the first line: FAIL first, then blocked, then failed.
+// Git's closing "error: failed to push some refs" summary never wins; the remote's own reason comes first.
+const reason = error => {
+  const lines = String(error.message).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const said = pattern => lines.find(line => pattern.test(line) && !/^error: failed to push some refs/.test(line));
+  return (lines.find(line => /^\w*Error:/.test(line)) ?? said(/\bFAIL\b/) ?? said(/(?<![\w/.-])blocked(?![\w/-])/i) ?? said(/(?<![\w/.-])failed(?![\w/-])/i) ?? lines[0] ?? 'unknown error').replace(/^Error:\s*/, '');
+};
 
 // Repositories a sync must never write, such as a frozen take-home. The list ships with the app;
 // one that cannot be read stops the sync instead of letting it write everywhere.

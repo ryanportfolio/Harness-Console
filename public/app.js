@@ -529,9 +529,10 @@ async function applySync() {
   catch (error) { showSyncError('Sync needs attention', error.message); renderSyncFoot(); }
 }
 // A rejected request has no job: drop the previous job's results and show the error in the open log.
+// Polls keep returning that previous job, so it stays hidden until a new job runs.
 function showSyncError(title, message) {
   $('syncActivity').hidden = false; $('syncActivityTitle').textContent = title; $('syncJobState').textContent = '';
-  $('syncMeter').hidden = true; $('syncResults').hidden = true; syncView.key = ''; syncView.listKey = ''; $('syncLogBox').open = true; $('syncLog').textContent = message;
+  $('syncMeter').hidden = true; $('syncResults').hidden = true; syncView.rejected = true; $('syncLogBox').open = true; $('syncLog').textContent = message;
 }
 // Links only to GitHub pull request pages, the one kind of url sync.mjs returns.
 function prLink(item, text) {
@@ -543,7 +544,7 @@ function prLink(item, text) {
 // after the job ends it was never run.
 const SYNC_ROW = { failed: ['Failed', 0], running: ['Running', 1], waiting: ['Waiting', 2], skipped: ['Not run', 3], merged: ['Merged', 4], current: ['Already current', 5] };
 const SYNC_STEPS = ['Checking GitHub', 'Fetching main', 'Writing skills', 'Running checks', 'Opening pull request', 'Merging'];
-const syncView = { rows: [], done: false, log: '', pick: null, key: '' };
+const syncView = { rows: [], done: false, log: '', pick: null, keys: {}, copied: null, rejected: false };
 const syncState = row => row.result ?? (syncView.done ? 'skipped' : row.step ? 'running' : 'waiting');
 // This repository's own lines from the job log (each starts "<id>: "); the log keeps only its last 24,000 characters.
 const repoLog = id => syncView.log.split(/\r?\n/).filter(line => line.startsWith(`${id}: `)).map(line => line.slice(id.length + 2));
@@ -556,13 +557,32 @@ $('syncActivity').addEventListener('click', async event => {
   if (!button) { const item = event.target.closest('li[data-id]'); if (item) { syncView.pick = item.dataset.id; drawSync(); } return; }
   const failures = syncView.rows.filter(row => row.result === 'failed');
   const rows = button.dataset.copy === 'all' ? failures : failures.filter(row => row.id === button.dataset.copy);
-  const label = button.textContent;
-  try { await navigator.clipboard.writeText(rows.map(failureText).join('\n\n')); button.textContent = 'Copied'; }
-  catch { button.textContent = 'Could not copy'; }
-  setTimeout(() => { button.textContent = label; }, 1500);
+  const id = button.dataset.copy;
+  let text;
+  try { await navigator.clipboard.writeText(rows.map(failureText).join('\n\n')); text = 'Copied'; }
+  catch { text = 'Could not copy'; }
+  // The feedback lives in syncView, so a redraw within the 1.5 seconds rebuilds the button with it.
+  const copied = syncView.copied = { id, text };
+  for (const shown of $('syncActivity').querySelectorAll('button[data-copy]')) if (shown.dataset.copy === id) shown.textContent = text;
+  setTimeout(() => {
+    if (syncView.copied !== copied) return;
+    syncView.copied = null;
+    for (const shown of $('syncActivity').querySelectorAll('button[data-copy]')) if (shown.dataset.copy === id) shown.textContent = shown.dataset.label;
+  }, 1500);
 });
 $('syncList').addEventListener('keydown', event => { if ((event.key === 'Enter' || event.key === ' ') && event.target.dataset.id) { event.preventDefault(); syncView.pick = event.target.dataset.id; drawSync(); $('syncList').querySelector('.picked')?.focus(); } });
-const copyButton = (id, text) => { const button = el('button', 'quiet copy', text); button.type = 'button'; button.dataset.copy = id; return button; };
+const copyButton = (id, label) => {
+  const button = el('button', 'quiet copy', syncView.copied?.id === id ? syncView.copied.text : label);
+  button.type = 'button'; button.dataset.copy = id; button.dataset.label = label; return button;
+};
+// Replaces a container's contents and gives focus back to the copy button or list item that had it.
+function redraw(container, children) {
+  const focused = container.contains(document.activeElement) ? document.activeElement : null;
+  const copy = focused?.dataset.copy, id = focused?.dataset.id;
+  container.replaceChildren(...children);
+  if (copy) [...container.querySelectorAll('button[data-copy]')].find(button => button.dataset.copy === copy)?.focus();
+  else if (id) [...container.querySelectorAll('li[data-id]')].find(item => item.dataset.id === id)?.focus();
+}
 function renderSyncRows(rows, done, log) {
   syncView.rows = rows; syncView.done = done; syncView.log = log;
   drawSync();
@@ -580,27 +600,23 @@ function drawSync() {
   // The reader's pick stays; without one, the first failure, else the running repository, else the first.
   const picked = sorted.find(row => row.id === syncView.pick) ?? sorted[0];
   const running = picked && syncState(picked) === 'running';
-  // The list redraws only when a row changes; the detail also redraws each second while its step's time runs.
-  const listKey = JSON.stringify([rows, done, picked?.id]);
-  const detailKey = JSON.stringify([listKey, picked && repoLog(picked.id), running && Math.floor(Date.now() / 1000)]);
-  if (detailKey === syncView.key) return; syncView.key = detailKey;
-  if (listKey !== syncView.listKey) {
-    syncView.listKey = listKey;
-    $('syncTally').replaceChildren(...[`${finished} of ${count(rows.length, 'repository', 'repositories')} done`,
+  // Each part redraws only when what it shows changes; the detail also each second while its step's time runs.
+  const changed = (part, value) => { const key = JSON.stringify(value); if (syncView.keys[part] === key) return false; syncView.keys[part] = key; return true; };
+  if (changed('tally', [tally, rows.length])) {
+    redraw($('syncTally'), [`${finished} of ${count(rows.length, 'repository', 'repositories')} done`,
       ...[[tally.merged, 'merged'], [tally.current, 'already current'], [tally.failed, 'failed']].filter(([n]) => n).map(([n, label]) => el('span', label === 'failed' ? 'bad' : '', `${n} ${label}`)),
       tally.failed ? copyButton('all', tally.failed > 1 ? `Copy all ${tally.failed} failures` : 'Copy failure') : null].filter(Boolean));
-    const line = row => ({ failed: row.error || 'Failed; see the full log.', running: `${row.step}…`, waiting: row.skills ? count(row.skills, 'skill', 'skills') : '', skipped: 'Not started', merged: row.url ? `#${row.url.split('/').pop()}` : '', current: '' })[syncState(row)];
-    // A redraw replaces the items, so the focused one gets focus back by its id.
-    const focused = document.activeElement?.closest?.('#syncList li[data-id]')?.dataset.id;
-    $('syncList').replaceChildren(...sorted.map(row => {
+  }
+  const line = row => ({ failed: row.error || 'Failed; see the full log.', running: `${row.step}…`, waiting: row.skills ? count(row.skills, 'skill', 'skills') : '', skipped: 'Not started', merged: row.url ? `#${row.url.split('/').pop()}` : '', current: '' })[syncState(row)];
+  if (changed('list', [sorted.map(row => [row.id, syncState(row), line(row)]), picked?.id])) {
+    redraw($('syncList'), sorted.map(row => {
       const item = el('li', `sync-item ${syncState(row)}${row === picked ? ' picked' : ''}`, el('span', 'mark', ''),
         el('span', 'name', el('strong', '', row.id.split('/')[1]), el('span', 'line', line(row))), el('span', 'state', SYNC_ROW[syncState(row)][0]));
       item.dataset.id = row.id; item.tabIndex = 0; if (row === picked) item.setAttribute('aria-current', 'true');
       return item;
     }));
-    if (focused) [...$('syncList').children].find(item => item.dataset.id === focused)?.focus();
   }
-  $('syncDetail').replaceChildren(...(picked ? syncDetail(picked) : []));
+  if (changed('detail', [picked, done, picked && repoLog(picked.id), running && Math.floor(Date.now() / 1000)])) redraw($('syncDetail'), picked ? syncDetail(picked) : []);
   $('syncResults').hidden = !rows.length;
 }
 function syncDetail(row) {
@@ -633,6 +649,11 @@ function setLog(pre, text) {
   pre.textContent = text; if (atEnd) pre.scrollTop = pre.scrollHeight;
 }
 function renderSyncJob(job) {
+  // A running job is a new one: it replaces a rejected request's error and the last run's pick.
+  if (job.status === 'running') {
+    if (lastJobStatus !== 'running') { syncView.pick = null; syncView.keys = {}; }
+    syncView.rejected = false;
+  } else if (syncView.rejected) return;
   $('syncActivity').hidden = false;
   const lock = job.kind === 'sync-lock', done = job.status !== 'running';
   const rows = job.progress ?? (done ? job.results : null) ?? [];
