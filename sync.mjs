@@ -326,7 +326,11 @@ export async function scanSkills({ root, execute = run, template: opened, cache,
     try {
       await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
       head = (await execute('git', ['-C', clone.folder, 'rev-parse', 'origin/main'])).trim();
-    } catch (error) { return { ...clone, harness: true, error: `Could not fetch. ${reason(error)}` }; }
+    } catch (error) {
+      // An origin with no main branch (a third-party clone on master, say) cannot be a Harness clone.
+      if (/couldn't find remote ref main\b/i.test(String(error.message))) return { ...clone, harness: false };
+      return { ...clone, harness: true, error: `Could not fetch. ${reason(error)}` };
+    }
     try {
       repo = { ...clone, head, ...await compareRepo({ template, folder: clone.folder, execute }) };
     } catch (error) { return { ...clone, harness: true, error: `Could not compare. ${reason(error)}` }; }
