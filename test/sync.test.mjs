@@ -104,6 +104,50 @@ test('scan classifies each skill against the template history', async t => {
   assert.deepEqual(repo.skills.find(skill => skill.name === 'beta').files, { changed: ['SKILL.md'], added: [], missing: [] });
 });
 
+test('a template folder without SKILL.md is not a skill, so a sync never copies it', async t => {
+  const data = await fixture(t);
+  const template = path.join(data.temp, 'template');
+  // Harness-Firmware's smart-compact holds only hooks/.
+  await put(template, '.claude/skills/smart-compact/hooks/compact.sh', 'echo\n');
+  await commit(template, 'hooks only');
+  const opened = await data.opened();
+  const [repo] = (await scanSkills({ root: data.root, execute: data.execute, template: opened })).repos;
+  assert.ok(!repo.skills.some(skill => skill.name === 'smart-compact'));
+  await applySkills({ root: data.root, execute: data.execute, template: opened, skip: [], selection: [{ id: 'owner/project', apply: ['delta', 'smart-compact'] }] });
+  const files = await run('git', ['--git-dir', data.remote, 'ls-tree', '-r', '--name-only', 'main']);
+  assert.ok(files.includes('.claude/skills/delta/SKILL.md'));
+  assert.ok(!files.includes('smart-compact'));
+});
+
+test('a Codex skill SKILL.md does not make a hooks-only Claude folder of the same name a retired skill', async t => {
+  const data = await fixture(t);
+  const template = path.join(data.temp, 'template');
+  await put(template, '.claude/skills/helper/hooks/run.sh', 'echo\n'); await put(template, '.agents/skills/helper/SKILL.md', 'helper codex\n');
+  await commit(template, 'helper');
+  const work = path.join(data.temp, 'work'); await run('git', ['clone', '-q', data.remote, work]);
+  await put(work, '.claude/skills/helper/hooks/run.sh', 'echo\n'); await commit(work, 'helper hooks');
+  await run('git', ['-C', work, 'push', '-q', 'origin', 'HEAD:main']);
+  const [repo] = (await scanSkills({ root: data.root, execute: data.execute, template: await data.opened() })).repos;
+  assert.ok(!repo.skills.some(skill => skill.name === 'helper' && ['removed', 'removed-edited'].includes(skill.status)));
+});
+
+test('a retired skill whose SKILL.md went before the rest of its folder still reads as untouched', async t => {
+  const data = await fixture(t);
+  const template = path.join(data.temp, 'template');
+  await put(template, '.claude/skills/zeta/SKILL.md', 'zeta\n'); await put(template, '.claude/skills/zeta/notes.md', 'notes\n');
+  await commit(template, 'add zeta');
+  await rm(path.join(template, '.claude/skills/zeta/SKILL.md'));
+  await commit(template, 'retire zeta, leftover notes');
+  await rm(path.join(template, '.claude/skills/zeta'), { recursive: true });
+  await commit(template, 'drop the leftover');
+  // The repository synced between the two removals and still holds the template's leftover folder.
+  const work = path.join(data.temp, 'work'); await run('git', ['clone', '-q', data.remote, work]);
+  await put(work, '.claude/skills/zeta/notes.md', 'notes\n'); await commit(work, 'leftover');
+  await run('git', ['-C', work, 'push', '-q', 'origin', 'HEAD:main']);
+  const [repo] = (await scanSkills({ root: data.root, execute: data.execute, template: await data.opened() })).repos;
+  assert.equal(statuses(repo).zeta, 'removed');
+});
+
 test('compare diffs the scanned main copy against the template copy a sync would write', async t => {
   const data = await fixture(t);
   const result = await scanSkills({ root: data.root, execute: data.execute, template: await data.opened() });

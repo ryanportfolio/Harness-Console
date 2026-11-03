@@ -545,18 +545,28 @@ function prLink(item, text) {
 // Right: the picked repository in full. A row without a result is waiting, or running while it names a step;
 // after the job ends it was never run.
 const SYNC_ROW = { failed: ['Failed', 0], running: ['Running', 1], waiting: ['Waiting', 2], skipped: ['Not run', 3], merged: ['Merged', 4], current: ['Already current', 5] };
-const SYNC_STEPS = ['Checking GitHub', 'Fetching main', 'Writing skills', 'Running checks', 'Opening pull request', 'Merging'];
-const syncView = { rows: [], done: false, log: '', pick: null, keys: {}, copied: null, rejected: false };
+const SYNC_STEPS = ['Checking GitHub', 'Fetching main', 'Writing skills', 'Running checks', 'Committing', 'Pushing', 'Opening pull request', 'Merging'];
+// lock: the job locks or unlocks one skill instead of syncing skills.
+const syncView = { rows: [], done: false, log: '', lock: false, pick: null, keys: {}, copied: null, rejected: false };
 const syncState = row => row.result ?? (syncView.done ? 'skipped' : row.step ? 'running' : 'waiting');
 // This repository's own lines from the job log (each starts "<id>: "); the log keeps only its last 24,000 characters.
 const repoLog = id => syncView.log.split(/\r?\n/).filter(line => line.startsWith(`${id}: `)).map(line => line.slice(id.length + 2));
+// A finished repository always logs at least one line, so one with none left had them cut from the front of a full log.
+const LOG_GONE = 'Its log lines were dropped: the console keeps only the last 24,000 characters of the log.';
+const logGone = row => Boolean(row.result && syncView.log.length >= 24000 && !repoLog(row.id).length);
 const elapsed = ms => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`; };
 // Plain text for pasting into a question: repository, failed step, error, pull request or branch, and its log lines.
-const failureText = row => [`Skill sync failed: ${row.id}`, row.failedAt && `Step: ${row.failedAt}`, `Error: ${row.error || 'see the full log'}`,
-  row.url && `Pull request: ${row.url}`, row.branch && `Branch: ${row.branch}`, ...(repoLog(row.id).length ? ['Log:', ...repoLog(row.id).slice(-40).map(line => `  ${line}`)] : [])].filter(Boolean).join('\n');
+const failureText = row => [`${syncView.lock ? 'Skill lock' : 'Skill sync'} failed: ${row.id}`, row.failedAt && `Step: ${row.failedAt}`, `Error: ${row.error || 'see the full log'}`,
+  row.url && `Pull request: ${row.url}`, row.branch && `Branch: ${row.branch}`, ...(repoLog(row.id).length ? ['Log:', ...repoLog(row.id).slice(-40).map(line => `  ${line}`)] : logGone(row) ? [`Log: ${LOG_GONE}`] : [])].filter(Boolean).join('\n');
 $('syncActivity').addEventListener('click', async event => {
   const button = event.target.closest('button[data-copy]');
-  if (!button) { const item = event.target.closest('li[data-id]'); if (item) { syncView.pick = item.dataset.id; drawSync(); } return; }
+  if (!button) {
+    const item = event.target.closest('button[data-id]'); if (!item) return;
+    syncView.pick = item.dataset.id; drawSync();
+    // At 900px and narrower the detail sits below the list, out of sight of the click.
+    if (matchMedia('(max-width: 900px)').matches) $('syncDetail').scrollIntoView({ block: 'start' });
+    return;
+  }
   const failures = syncView.rows.filter(row => row.result === 'failed');
   const rows = button.dataset.copy === 'all' ? failures : failures.filter(row => row.id === button.dataset.copy);
   const id = button.dataset.copy;
@@ -572,21 +582,20 @@ $('syncActivity').addEventListener('click', async event => {
     for (const shown of $('syncActivity').querySelectorAll('button[data-copy]')) if (shown.dataset.copy === id) shown.textContent = shown.dataset.label;
   }, 1500);
 });
-$('syncList').addEventListener('keydown', event => { if ((event.key === 'Enter' || event.key === ' ') && event.target.dataset.id) { event.preventDefault(); syncView.pick = event.target.dataset.id; drawSync(); $('syncList').querySelector('.picked')?.focus(); } });
 const copyButton = (id, label) => {
   const button = el('button', 'quiet copy', syncView.copied?.id === id ? syncView.copied.text : label);
   button.type = 'button'; button.dataset.copy = id; button.dataset.label = label; return button;
 };
-// Replaces a container's contents and gives focus back to the copy button or list item that had it.
+// Replaces a container's contents and gives focus back to the copy button or repository button that had it.
 function redraw(container, children) {
   const focused = container.contains(document.activeElement) ? document.activeElement : null;
   const copy = focused?.dataset.copy, id = focused?.dataset.id;
   container.replaceChildren(...children);
   if (copy) [...container.querySelectorAll('button[data-copy]')].find(button => button.dataset.copy === copy)?.focus();
-  else if (id) [...container.querySelectorAll('li[data-id]')].find(item => item.dataset.id === id)?.focus();
+  else if (id) [...container.querySelectorAll('button[data-id]')].find(item => item.dataset.id === id)?.focus();
 }
-function renderSyncRows(rows, done, log) {
-  syncView.rows = rows; syncView.done = done; syncView.log = log;
+function renderSyncRows(rows, done, log, lock) {
+  syncView.rows = rows; syncView.done = done; syncView.log = log; syncView.lock = lock;
   drawSync();
   return { failed: rows.filter(row => row.result === 'failed').length, succeeded: rows.filter(row => row.result === 'merged' || row.result === 'current').length };
 }
@@ -612,10 +621,11 @@ function drawSync() {
   const line = row => ({ failed: row.error || 'Failed; see the full log.', running: `${row.step}…`, waiting: row.skills ? count(row.skills, 'skill', 'skills') : '', skipped: 'Not started', merged: row.url ? `#${row.url.split('/').pop()}` : '', current: '' })[syncState(row)];
   if (changed('list', [sorted.map(row => [row.id, syncState(row), line(row)]), picked?.id])) {
     redraw($('syncList'), sorted.map(row => {
-      const item = el('li', `sync-item ${syncState(row)}${row === picked ? ' picked' : ''}`, el('span', 'mark', ''),
+      // A button per repository, so a screen reader announces it as one to press; aria-current marks the picked one.
+      const item = el('button', `sync-item ${syncState(row)}${row === picked ? ' picked' : ''}`, el('span', 'mark', ''),
         el('span', 'name', el('strong', '', row.id.split('/')[1]), el('span', 'line', line(row))), el('span', 'state', SYNC_ROW[syncState(row)][0]));
-      item.dataset.id = row.id; item.tabIndex = 0; if (row === picked) item.setAttribute('aria-current', 'true');
-      return item;
+      item.type = 'button'; item.dataset.id = row.id; if (row === picked) item.setAttribute('aria-current', 'true');
+      return el('li', '', item);
     }));
   }
   if (changed('detail', [picked, done, picked && repoLog(picked.id), running && Math.floor(Date.now() / 1000)])) {
@@ -644,11 +654,11 @@ function syncDetail(row) {
     failed ? el('p', 'where', where, row.url && where ? ' · ' : '', prLink(row, `Open pull request #${row.url?.split('/').pop()}`)) : null,
     failed ? el('p', 'copy-line', copyButton(row.id, 'Copy for AI'), el('span', '', 'Copies the repository, step, error, pull request and its log lines.')) : null,
     state === 'merged' ? el('p', 'where', 'Merged in ', prLink(row) ?? 'a pull request', row.skills ? ` · ${count(row.skills, 'skill', 'skills')}` : '') : null,
-    state === 'current' ? el('p', 'where', 'Nothing to change; main already has these skills.') : null,
+    state === 'current' ? el('p', 'where', syncView.lock ? 'Nothing to change; the lock list on main already says this.' : 'Nothing to change; main already has these skills.') : null,
     state === 'waiting' ? el('p', 'where', `Waiting for the repositories before it${row.skills ? ` · ${count(row.skills, 'skill', 'skills')}` : ''}.`) : null,
     state === 'skipped' ? el('p', 'where', 'The sync stopped before this repository; nothing was written.') : null,
     row.steps ? el('h4', '', 'Steps') : null, row.steps ? el('ol', 'steps', ...steps) : null,
-    lines.length ? el('h4', '', 'Log') : null, lines.length ? el('pre', 'repo-log', lines.slice(-40).join('\n')) : null,
+    lines.length || logGone(row) ? el('h4', '', 'Log') : null, lines.length ? el('pre', 'repo-log', lines.slice(-40).join('\n')) : logGone(row) ? el('p', 'where', LOG_GONE) : null,
   ].filter(Boolean);
 }
 // Rewrites the log only when it grew, and follows new lines only while the reader is at the bottom.
@@ -665,7 +675,7 @@ function renderSyncJob(job) {
   $('syncActivity').hidden = false;
   const lock = job.kind === 'sync-lock', done = job.status !== 'running';
   const rows = job.progress ?? (done ? job.results : null) ?? [];
-  const { failed, succeeded } = renderSyncRows(rows, done, job.log || ''), total = rows.length;
+  const { failed, succeeded } = renderSyncRows(rows, done, job.log || '', lock), total = rows.length;
   const many = !lock && total > 1;
   $('syncActivityTitle').textContent = !done ? (lock ? 'Updating skill lock' : 'Syncing skills')
     : job.status === 'complete' ? (lock ? 'Skill lock updated' : many ? `${count(total, 'repository', 'repositories')} synced` : 'Skills synced')

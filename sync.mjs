@@ -130,11 +130,17 @@ export function parseTree(text) {
 // Skill folder tree hashes under both skill roots: { '.claude/skills': Map(name -> sha), ... }.
 // A file, symlink or submodule at a skill path lands in odd ('<part>/<name>'): it is not a folder
 // the template ever had, so treating it as absent would let a sync overwrite or delete it.
-async function skillTrees(git, rev) {
+// skillsOnly (the template's head): a folder without SKILL.md, such as one holding only hooks, is
+// not a skill, so a sync neither adds it to a repository nor removes it from one.
+async function skillTrees(git, rev, { skillsOnly = false } = {}) {
   const trees = Object.fromEntries(PARTS.map(part => [part, new Map()])); trees.odd = new Set();
+  // No fallback here: an unreadable list would make every template skill look retired.
+  const skills = skillsOnly && new Set((await git(['ls-tree', '-r', '-z', '--name-only', rev, '--', ...PARTS.map(part => `${part}/`)]))
+    .split('\0').filter(file => /^[^/]+\/skills\/[^/]+\/SKILL\.md$/.test(file)).map(file => file.slice(0, -'/SKILL.md'.length)));
   for (const entry of parseTree(await git(['ls-tree', '-z', rev, ...PARTS.map(part => `${part}/`)]).catch(() => ''))) {
     const part = PARTS.find(prefix => entry.path.startsWith(`${prefix}/`)); const name = entry.path.slice(part.length + 1);
     if (!SKILL_NAME.test(name)) continue;
+    if (skills && entry.type === 'tree' && !skills.has(entry.path)) continue;
     if (entry.type === 'tree') trees[part].set(name, entry.sha); else trees.odd.add(`${part}/${name}`);
   }
   return trees;
@@ -161,9 +167,16 @@ export async function openTemplate({ cache = TEMPLATE_CACHE, source = `https://g
   for (let index = 0; index < commits.length; index += 8) {
     await Promise.all(commits.slice(index, index + 8).map(async commit => { if (!commitTrees.has(commit)) commitTrees.set(commit, await skillTrees(git, commit)); }));
   }
+  // Only folders that held a SKILL.md at some point have a history, per root (a Codex skill's SKILL.md
+  // says nothing about a hooks-only Claude folder of the same name). Every tree of such a folder counts,
+  // including a retired skill's leftover folder after its SKILL.md went, so a repository still holding
+  // that leftover reads as untouched. A folder that never had one (hooks only) is never a skill.
+  const everSkill = new Set((await git(['log', '--format=', '--name-only', head, '--', ...PARTS])).split(/\r?\n/)
+    .map(file => /^([^/]+\/skills\/[^/]+)\/SKILL\.md$/.exec(file.trim())?.[1]).filter(Boolean));
   // age: how recent each tree is, as the index of the newest commit holding it (0 = head).
   const age = Object.fromEntries(PARTS.map(part => [part, new Map()]));
   commits.forEach((commit, index) => { for (const part of PARTS) for (const [name, sha] of commitTrees.get(commit)[part]) {
+    if (!everSkill.has(`${part}/${name}`)) continue;
     if (!history[part].has(name)) { history[part].set(name, new Set()); age[part].set(name, new Map()); }
     history[part].get(name).add(sha);
     if (!age[part].get(name).has(sha)) age[part].get(name).set(sha, index);
@@ -171,7 +184,7 @@ export async function openTemplate({ cache = TEMPLATE_CACHE, source = `https://g
   const modes = (await showJson(git, head, '.agents/skill-modes.json'))?.skills ?? {};
   const registries = Object.fromEntries(await Promise.all(REGISTRIES.map(async file => [file, await showJson(git, head, file)])));
   const classes = classifications(await git(['show', `${head}:${COMPATIBILITY}`]).catch(() => ''));
-  const current = await skillTrees(git, head);
+  const current = await skillTrees(git, head, { skillsOnly: true });
   // Codex-only skills: a SKILL.md under .agents/skills with no Claude copy. A leftover folder without
   // SKILL.md is not a skill.
   const codexOnly = new Set((await git(['ls-tree', '-r', '-z', '--name-only', head, '--', `${PARTS[1]}/`])).split('\0')
@@ -573,10 +586,11 @@ function removedSummary(result) {
 // Pushes the worktree's commit to a new branch, opens a pull request into main and squash-merges it.
 // Main is never pushed to directly. Returns { branch, url }; a failure after the push carries them.
 async function mergeCommit({ git, execute, worktree, github, commit, base, title, body, say, step = () => {} }) {
-  step('Opening pull request');
+  step('Pushing');
   const branch = await freeBranch(git, base);
   // A plain push of a new branch: it never moves main and never overwrites an existing branch.
   await git([...GIT_CRED, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`]);
+  step('Opening pull request');
   // Run from the worktree, whose origin is this repository, in case gh reads the local remotes.
   let out;
   try { out = await execute('gh', ['pr', 'create', '--repo', github.name, '--base', github.branch, '--head', branch, '--title', title, '--body', body], { cwd: worktree }); }
@@ -681,6 +695,7 @@ async function applyRepo({ template, clone, skipList, apply, remove, replace, ex
 
     await git(['add', '-A']);
     if (await git(['diff', '--cached', '--quiet']).then(() => true, () => false)) { say('already current'); return { id: clone.id, result: 'current' }; }
+    step('Committing');
     const updated = take.filter(name => status.get(name) === 'behind'), added = take.filter(name => status.get(name) === 'new');
     const changes = [updated.length && `Updated: ${updated.join(', ')}`, added.length && `Added: ${added.join(', ')}`, swap.length && `Replaced edited copies: ${swap.join(', ')}`, drop.length && `Removed: ${drop.join(', ')}`].filter(Boolean);
     const source = `Template: ${TEMPLATE}@${template.head.slice(0, 7)}`;
