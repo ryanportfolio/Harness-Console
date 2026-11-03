@@ -104,6 +104,21 @@ test('scan classifies each skill against the template history', async t => {
   assert.deepEqual(repo.skills.find(skill => skill.name === 'beta').files, { changed: ['SKILL.md'], added: [], missing: [] });
 });
 
+test('a template folder without SKILL.md is not a skill, so a sync never copies it', async t => {
+  const data = await fixture(t);
+  const template = path.join(data.temp, 'template');
+  // Harness-Firmware's smart-compact holds only hooks/.
+  await put(template, '.claude/skills/smart-compact/hooks/compact.sh', 'echo\n');
+  await commit(template, 'hooks only');
+  const opened = await data.opened();
+  const [repo] = (await scanSkills({ root: data.root, execute: data.execute, template: opened })).repos;
+  assert.ok(!repo.skills.some(skill => skill.name === 'smart-compact'));
+  await applySkills({ root: data.root, execute: data.execute, template: opened, skip: [], selection: [{ id: 'owner/project', apply: ['delta', 'smart-compact'] }] });
+  const files = await run('git', ['--git-dir', data.remote, 'ls-tree', '-r', '--name-only', 'main']);
+  assert.ok(files.includes('.claude/skills/delta/SKILL.md'));
+  assert.ok(!files.includes('smart-compact'));
+});
+
 test('compare diffs the scanned main copy against the template copy a sync would write', async t => {
   const data = await fixture(t);
   const result = await scanSkills({ root: data.root, execute: data.execute, template: await data.opened() });
