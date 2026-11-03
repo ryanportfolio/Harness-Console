@@ -407,7 +407,7 @@ async function changeLock(repo, skill, lock) {
   let reason = '';
   if (lock) { const answer = prompt(`Lock ${skill.name} in ${repo.name}? Skill sync will leave it as it is, including Select all. This merges a change to .agents/skill-locks.json on GitHub.\n\nReason (optional):`, ''); if (answer === null) return; reason = answer.trim().slice(0, 300); }
   else if (!confirm(`Unlock ${skill.name} in ${repo.name}? Skill sync can update it again. This merges a change to .agents/skill-locks.json on GitHub.`)) return;
-  try { await api('sync-lock', { id: repo.id, skill: skill.name, lock, reason }); lastJobStatus = undefined; await poll(); }
+  try { await api('sync-lock', { id: repo.id, skill: skill.name, lock, reason }); acceptedSyncJob(); await poll(); }
   catch (error) { showSyncError('Lock needs attention', error.message); }
 }
 function lockButton(repo, skill, lock) {
@@ -525,9 +525,11 @@ async function applySync() {
   const selection = syncSelection(); if (!selection.length) return;
   if (!sync.armed) { sync.armed = true; renderSyncFoot(); return; }
   sync.armed = false;
-  try { await api('sync', { repos: selection }); lastJobStatus = undefined; await poll(); $('syncActivity').scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+  try { await api('sync', { repos: selection }); acceptedSyncJob(); await poll(); $('syncActivity').scrollIntoView({ block: 'start', behavior: 'smooth' }); }
   catch (error) { showSyncError('Sync needs attention', error.message); renderSyncFoot(); }
 }
+// An accepted request started a new job, which may finish before the next poll sees it running.
+function acceptedSyncJob() { lastJobStatus = undefined; syncView.rejected = false; syncView.pick = null; syncView.keys = {}; }
 // A rejected request has no job: drop the previous job's results and show the error in the open log.
 // Polls keep returning that previous job, so it stays hidden until a new job runs.
 function showSyncError(title, message) {
@@ -616,7 +618,14 @@ function drawSync() {
       return item;
     }));
   }
-  if (changed('detail', [picked, done, picked && repoLog(picked.id), running && Math.floor(Date.now() / 1000)])) redraw($('syncDetail'), picked ? syncDetail(picked) : []);
+  if (changed('detail', [picked, done, picked && repoLog(picked.id), running && Math.floor(Date.now() / 1000)])) {
+    // The repository log keeps the reader's place across redraws, and follows new lines while at the bottom.
+    const log = $('syncDetail').querySelector('.repo-log'), same = log && picked?.id === syncView.shown;
+    const atEnd = !log || log.scrollHeight - log.scrollTop - log.clientHeight < 8, top = log?.scrollTop;
+    redraw($('syncDetail'), picked ? syncDetail(picked) : []); syncView.shown = picked?.id;
+    const next = $('syncDetail').querySelector('.repo-log');
+    if (next && same) next.scrollTop = atEnd ? next.scrollHeight : top;
+  }
   $('syncResults').hidden = !rows.length;
 }
 function syncDetail(row) {
@@ -649,11 +658,10 @@ function setLog(pre, text) {
   pre.textContent = text; if (atEnd) pre.scrollTop = pre.scrollHeight;
 }
 function renderSyncJob(job) {
-  // A running job is a new one: it replaces a rejected request's error and the last run's pick.
-  if (job.status === 'running') {
-    if (lastJobStatus !== 'running') { syncView.pick = null; syncView.keys = {}; }
-    syncView.rejected = false;
-  } else if (syncView.rejected) return;
+  // A rejected request's error stays over the finished job before it. A running job (one that was already
+  // running when the request was refused) or the next accepted request (acceptedSyncJob) replaces it.
+  if (job.status === 'running') syncView.rejected = false;
+  else if (syncView.rejected) return;
   $('syncActivity').hidden = false;
   const lock = job.kind === 'sync-lock', done = job.status !== 'running';
   const rows = job.progress ?? (done ? job.results : null) ?? [];
