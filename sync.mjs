@@ -130,7 +130,7 @@ export function parseTree(text) {
 // Skill folder tree hashes under both skill roots: { '.claude/skills': Map(name -> sha), ... }.
 // A file, symlink or submodule at a skill path lands in odd ('<part>/<name>'): it is not a folder
 // the template ever had, so treating it as absent would let a sync overwrite or delete it.
-// skillsOnly (the template's side): a folder without SKILL.md, such as one holding only hooks, is
+// skillsOnly (the template's head): a folder without SKILL.md, such as one holding only hooks, is
 // not a skill, so a sync neither adds it to a repository nor removes it from one.
 async function skillTrees(git, rev, { skillsOnly = false } = {}) {
   const trees = Object.fromEntries(PARTS.map(part => [part, new Map()])); trees.odd = new Set();
@@ -164,11 +164,17 @@ export async function openTemplate({ cache = TEMPLATE_CACHE, source = `https://g
   const history = Object.fromEntries(PARTS.map(part => [part, new Map()]));
   const commits = (await git(['log', '--format=%H', head, '--', ...PARTS])).split(/\r?\n/).filter(Boolean);
   for (let index = 0; index < commits.length; index += 8) {
-    await Promise.all(commits.slice(index, index + 8).map(async commit => { if (!commitTrees.has(commit)) commitTrees.set(commit, await skillTrees(git, commit, { skillsOnly: true })); }));
+    await Promise.all(commits.slice(index, index + 8).map(async commit => { if (!commitTrees.has(commit)) commitTrees.set(commit, await skillTrees(git, commit)); }));
   }
+  // Only names that held a SKILL.md at some point have a history. Every tree of such a name counts,
+  // including a retired skill's leftover folder after its SKILL.md went, so a repository still holding
+  // that leftover reads as untouched. A folder that never had one (hooks only) is never a skill.
+  const everSkill = new Set((await git(['log', '--format=', '--name-only', head, '--', ...PARTS])).split(/\r?\n/)
+    .map(file => /^[^/]+\/skills\/([^/]+)\/SKILL\.md$/.exec(file.trim())?.[1]).filter(Boolean));
   // age: how recent each tree is, as the index of the newest commit holding it (0 = head).
   const age = Object.fromEntries(PARTS.map(part => [part, new Map()]));
   commits.forEach((commit, index) => { for (const part of PARTS) for (const [name, sha] of commitTrees.get(commit)[part]) {
+    if (!everSkill.has(name)) continue;
     if (!history[part].has(name)) { history[part].set(name, new Set()); age[part].set(name, new Map()); }
     history[part].get(name).add(sha);
     if (!age[part].get(name).has(sha)) age[part].get(name).set(sha, index);
@@ -685,9 +691,9 @@ async function applyRepo({ template, clone, skipList, apply, remove, replace, ex
     if (has['removed-skills.mjs']) checks.push(...removedSummary(await node(script('removed-skills.mjs'), [], worktree, execute)));
     else checks.push('- removed-skills.mjs: not in this repository, not run');
 
-    step('Committing');
     await git(['add', '-A']);
     if (await git(['diff', '--cached', '--quiet']).then(() => true, () => false)) { say('already current'); return { id: clone.id, result: 'current' }; }
+    step('Committing');
     const updated = take.filter(name => status.get(name) === 'behind'), added = take.filter(name => status.get(name) === 'new');
     const changes = [updated.length && `Updated: ${updated.join(', ')}`, added.length && `Added: ${added.join(', ')}`, swap.length && `Replaced edited copies: ${swap.join(', ')}`, drop.length && `Removed: ${drop.join(', ')}`].filter(Boolean);
     const source = `Template: ${TEMPLATE}@${template.head.slice(0, 7)}`;

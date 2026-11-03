@@ -551,9 +551,9 @@ const syncView = { rows: [], done: false, log: '', lock: false, pick: null, keys
 const syncState = row => row.result ?? (syncView.done ? 'skipped' : row.step ? 'running' : 'waiting');
 // This repository's own lines from the job log (each starts "<id>: "); the log keeps only its last 24,000 characters.
 const repoLog = id => syncView.log.split(/\r?\n/).filter(line => line.startsWith(`${id}: `)).map(line => line.slice(id.length + 2));
-// A finished repository always logs a line, so one with none left had them cut from the front of a full log.
+// A finished repository always logs at least one line, so one with none left had them cut from the front of a full log.
 const LOG_GONE = 'Its log lines were dropped: the console keeps only the last 24,000 characters of the log.';
-const logGone = row => Boolean(row.result && row.steps?.length && syncView.log.length >= 24000 && !repoLog(row.id).length);
+const logGone = row => Boolean(row.result && syncView.log.length >= 24000 && !repoLog(row.id).length);
 const elapsed = ms => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`; };
 // Plain text for pasting into a question: repository, failed step, error, pull request or branch, and its log lines.
 const failureText = row => [`${syncView.lock ? 'Skill lock' : 'Skill sync'} failed: ${row.id}`, row.failedAt && `Step: ${row.failedAt}`, `Error: ${row.error || 'see the full log'}`,

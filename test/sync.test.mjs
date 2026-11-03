@@ -119,6 +119,23 @@ test('a template folder without SKILL.md is not a skill, so a sync never copies 
   assert.ok(!files.includes('smart-compact'));
 });
 
+test('a retired skill whose SKILL.md went before the rest of its folder still reads as untouched', async t => {
+  const data = await fixture(t);
+  const template = path.join(data.temp, 'template');
+  await put(template, '.claude/skills/zeta/SKILL.md', 'zeta\n'); await put(template, '.claude/skills/zeta/notes.md', 'notes\n');
+  await commit(template, 'add zeta');
+  await rm(path.join(template, '.claude/skills/zeta/SKILL.md'));
+  await commit(template, 'retire zeta, leftover notes');
+  await rm(path.join(template, '.claude/skills/zeta'), { recursive: true });
+  await commit(template, 'drop the leftover');
+  // The repository synced between the two removals and still holds the template's leftover folder.
+  const work = path.join(data.temp, 'work'); await run('git', ['clone', '-q', data.remote, work]);
+  await put(work, '.claude/skills/zeta/notes.md', 'notes\n'); await commit(work, 'leftover');
+  await run('git', ['-C', work, 'push', '-q', 'origin', 'HEAD:main']);
+  const [repo] = (await scanSkills({ root: data.root, execute: data.execute, template: await data.opened() })).repos;
+  assert.equal(statuses(repo).zeta, 'removed');
+});
+
 test('compare diffs the scanned main copy against the template copy a sync would write', async t => {
   const data = await fixture(t);
   const result = await scanSkills({ root: data.root, execute: data.execute, template: await data.opened() });
