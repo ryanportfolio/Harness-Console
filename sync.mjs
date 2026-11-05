@@ -218,6 +218,50 @@ export async function findClones({ root, execute = run, template = TEMPLATE }) {
   return [...found.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
+// Local folders: Git folders directly under root, without a GitHub origin, that the user added to Skill
+// sync by name (settings "localFolders"). Each is listed as local/<folder>. With no GitHub repository
+// behind it, a scan reads its local main and a sync commits to that main instead of opening a pull request.
+// problem: why the folder cannot be scanned or synced as a local folder now.
+const LOCAL_OWNER = 'local';
+async function localClone({ root, name, execute }) {
+  const folder = path.join(root, name), clone = { id: `${LOCAL_OWNER}/${name}`, name, folder, local: true };
+  if (!await lstat(path.join(folder, '.git')).catch(() => null)) return { ...clone, problem: `No Git folder at ${folder}.` };
+  if (githubId(await execute('git', ['-C', folder, 'config', '--get', 'remote.origin.url']).catch(() => ''))) return { ...clone, problem: 'Its origin is on GitHub now, so it is synced as a GitHub clone; remove it from local folders.' };
+  return clone;
+}
+const localClones = ({ root, local = [], execute }) => Promise.all([...new Set(local)].map(name => localClone({ root, name, execute })));
+// The folders the tab can add: Git folders directly under root whose origin is missing or not on GitHub.
+export async function localCandidates({ root, execute = run }) {
+  const found = [];
+  for (const entry of await readdir(root, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isDirectory() || !/^[A-Za-z0-9_.-]{1,100}$/.test(entry.name)) continue;
+    const folder = path.join(root, entry.name);
+    if (!await lstat(path.join(folder, '.git')).catch(() => null)) continue;
+    if (!githubId(await execute('git', ['-C', folder, 'config', '--get', 'remote.origin.url']).catch(() => ''))) found.push(entry.name);
+  }
+  return found.sort((a, b) => a.localeCompare(b));
+}
+const localMain = async (folder, execute) => {
+  try { return (await execute('git', ['-C', folder, 'rev-parse', '--verify', '--quiet', 'refs/heads/main^{commit}'])).trim(); }
+  catch { throw new Error('This folder has no main branch.'); }
+};
+// Moves local main from head to commit, a fast-forward: commit was built on head. Where main is checked
+// out, that checkout is fast-forwarded in place so its files follow main, and uncommitted changes to
+// tracked files stop it (git itself refuses to overwrite an untracked file). Elsewhere the ref moves only
+// while main is still at head. Either way main is left as it was when anything fails.
+async function landLocal({ folder, head, commit, execute, step = () => {} }) {
+  step('Updating main');
+  let at = null, checkout = null;
+  for (const line of (await execute('git', ['-C', folder, 'worktree', 'list', '--porcelain'])).split(/\r?\n/)) {
+    if (line.startsWith('worktree ')) at = line.slice(9);
+    else if (line === 'branch refs/heads/main') checkout = at;
+  }
+  if (!checkout) { await execute('git', ['-C', folder, 'update-ref', '-m', 'Harness Console skill sync', 'refs/heads/main', commit, head]); return; }
+  if (await localMain(folder, execute) !== head) throw new Error('main moved since the sync started; check repositories again. main was not changed.');
+  if ((await execute('git', ['-C', checkout, 'status', '--porcelain', '--untracked-files=no'])).trim()) throw new Error(`main is checked out in ${checkout} with uncommitted changes; commit or stash them and sync again. main was not changed.`);
+  await execute('git', ['-C', checkout, 'merge', '--ff-only', '--quiet', commit]);
+}
+
 // A template without this part of the skill counts as empty, so every local file shows as added.
 async function fileDiff(template, git, rev, name, part = PARTS[0]) {
   const list = async (run, tree) => new Map(parseTree(await run(['ls-tree', '-z', '-r', tree])).map(entry => [entry.path, entry.sha]));
@@ -312,13 +356,23 @@ async function limit(items, size, work) {
 // is not fetched either. Whether a clone is a Harness clone needs the fetched tree, so an archived
 // repository or a failed lookup is reported only for a Harness clone; other clones stay unlisted.
 // Skipped and failed repositories carry no skills, so none can be picked.
-export async function scanSkills({ root, execute = run, template: opened, cache, source, skip } = {}) {
+// A local folder (local: folder names) is never fetched: its local main is compared. The user added it,
+// so it is listed even when it has no Harness skills, with that as its error.
+export async function scanSkills({ root, execute = run, template: opened, cache, source, skip, local = [] } = {}) {
   const skipList = skip ?? await readSkipList();
   const template = opened ?? await openTemplate({ cache, source, execute });
-  const clones = await findClones({ root, execute });
-  const repos = await limit(clones, 6, async clone => {
+  const clones = [...await findClones({ root, execute }), ...await localClones({ root, local, execute })];
+  const repos = await limit(clones, 6, async ({ problem, ...clone }) => {
     const listed = skipReason(skipList, clone.id);
     if (listed !== null) return { ...clone, harness: true, skipped: listed };
+    if (clone.local) {
+      if (problem) return { ...clone, harness: true, error: problem };
+      let head, repo;
+      try { head = await localMain(clone.folder, execute); } catch (error) { return { ...clone, harness: true, error: error.message }; }
+      try { repo = { ...clone, head, ...await compareRepo({ template, folder: clone.folder, rev: head, execute }) }; }
+      catch (error) { return { ...clone, harness: true, error: `Could not compare. ${reason(error)}` }; }
+      return repo.harness ? repo : { ...clone, harness: true, error: 'No Harness skills on main, so there is nothing to sync.' };
+    }
     const github = await githubState(clone.id, execute);
     const renamed = github.name ? skipReason(skipList, github.name) : null;
     if (renamed !== null) return { ...clone, harness: true, skipped: renamed };
@@ -587,18 +641,25 @@ async function mergeCommit({ git, execute, worktree, github, commit, base, title
 
 // Applies one repository's selection in a temporary worktree on origin/main, pushes it to a new
 // branch, opens a pull request into main and squash-merges it. Main is never pushed to directly.
+// A local folder builds on its local main instead and the commit fast-forwards that main (landLocal).
 async function applyRepo({ template, clone, skipList, apply, remove, replace, execute, onOutput, step }) {
   const say = text => onOutput(`${clone.id}: ${text}\n`);
-  step('Checking GitHub');
-  const github = await githubState(clone.id, execute);
-  // The skip list also matches the name GitHub reports, which follows a rename the origin may still use.
-  const listed = github.name ? skipReason(skipList, github.name) : null;
-  if (listed !== null) throw new Error(`Skipped: ${listed}. Nothing was written.`);
-  if (github.skipped) throw new Error(`Skipped: ${github.skipped}. Nothing was written.`);
-  if (github.blocked) throw new Error(github.blocked);
-  step('Fetching main');
-  await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
-  const head = (await execute('git', ['-C', clone.folder, 'rev-parse', 'origin/main'])).trim();
+  let github = null, head;
+  if (clone.local) {
+    step('Reading main');
+    head = await localMain(clone.folder, execute);
+  } else {
+    step('Checking GitHub');
+    github = await githubState(clone.id, execute);
+    // The skip list also matches the name GitHub reports, which follows a rename the origin may still use.
+    const listed = github.name ? skipReason(skipList, github.name) : null;
+    if (listed !== null) throw new Error(`Skipped: ${listed}. Nothing was written.`);
+    if (github.skipped) throw new Error(`Skipped: ${github.skipped}. Nothing was written.`);
+    if (github.blocked) throw new Error(github.blocked);
+    step('Fetching main');
+    await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
+    head = (await execute('git', ['-C', clone.folder, 'rev-parse', 'origin/main'])).trim();
+  }
   const { skills, nativeCopies } = await compareRepo({ template, folder: clone.folder, rev: head, execute });
   const status = new Map(skills.map(skill => [skill.name, skill.status])), found = new Map(skills.map(skill => [skill.name, skill]));
   const take = apply.filter(name => ['behind', 'new'].includes(status.get(name)));
@@ -666,6 +727,14 @@ async function applyRepo({ template, clone, skipList, apply, remove, replace, ex
     const updated = take.filter(name => status.get(name) === 'behind'), added = take.filter(name => status.get(name) === 'new');
     const changes = [updated.length && `Updated: ${updated.join(', ')}`, added.length && `Added: ${added.join(', ')}`, swap.length && `Replaced edited copies: ${swap.join(', ')}`, drop.length && `Removed: ${drop.join(', ')}`].filter(Boolean);
     const source = `Template: ${TEMPLATE}@${template.head.slice(0, 7)}`;
+    if (clone.local) {
+      // No pull request lists the checks, so the commit message does.
+      await git(['commit', '-q', '-m', PR_TITLE, '-m', [...changes, source, '', 'Checks run on this change in a temporary checkout of main before it was committed:', ...checks, '', 'Committed by Harness Console skill sync.'].join('\n')]);
+      const commit = (await git(['rev-parse', 'HEAD'])).trim();
+      await landLocal({ folder: clone.folder, head, commit, execute, step });
+      say(`committed ${commit.slice(0, 7)} to local main (${changes.join('; ')})`);
+      return { id: clone.id, result: 'committed', commit };
+    }
     await git(['commit', '-q', '-m', PR_TITLE, '-m', [...changes, source].join('\n')]);
     const commit = (await git(['rev-parse', 'HEAD'])).trim();
     const body = [...changes, source, '', 'Checks run on this change in a temporary checkout of main before it was committed:', ...checks, '', 'Opened by Harness Console skill sync.'].join('\n');
@@ -708,41 +777,51 @@ async function removeWorktree(folder, temp, worktree, execute, say) {
 // fetch, so a skill edited on GitHub since the scan is skipped rather than overwritten. The skip list
 // and GitHub's archived flag are checked again here, whatever the scan said.
 // onProgress(id, { step }) names the step a repository is on; onProgress(id, result) reports its outcome.
-export async function applySkills({ root, selection, execute = run, template: opened, cache, source, skip, onOutput = () => {}, onProgress = () => {} }) {
+export async function applySkills({ root, selection, execute = run, template: opened, cache, source, skip, local = [], onOutput = () => {}, onProgress = () => {} }) {
   const skipList = skip ?? await readSkipList();
   const template = opened ?? await openTemplate({ cache, source, execute, onOutput });
-  const clones = new Map((await findClones({ root, execute })).map(clone => [clone.id, clone]));
+  const clones = new Map([...await findClones({ root, execute }), ...await localClones({ root, local, execute })].map(clone => [clone.id, clone]));
   const results = [];
   const done = result => { results.push(result); onProgress(result.id, result); };
   for (const { id, apply = [], remove = [], replace = [] } of selection) {
     const clone = clones.get(id), listed = skipReason(skipList, id);
     if (!clone) { done({ id, result: 'failed', error: 'No clone in the CoreWise folder.' }); onOutput(`${id}: no clone in the CoreWise folder\n`); continue; }
+    if (clone.problem) { done({ id, result: 'failed', error: clone.problem }); onOutput(`${id}: ${clone.problem} Nothing written\n`); continue; }
     if (listed !== null) { done({ id, result: 'failed', error: `Skipped: ${listed}.` }); onOutput(`${id}: skipped, ${listed}; nothing written\n`); continue; }
     try { done(await applyRepo({ template, clone, skipList, apply, remove, replace, execute, onOutput, step: step => onProgress(id, { step }) })); }
     catch (error) { const message = reason(error); done({ id, result: 'failed', error: message, ...(error.branch && { branch: error.branch }), ...(error.url && { url: error.url }) }); onOutput(`${id}: failed${error.branch ? '' : ', nothing pushed'}. ${message}\n`); }
   }
   const failed = results.filter(result => result.result === 'failed');
   if (failed.length) throw Object.assign(new Error(`${failed.length} of ${results.length} repositories failed: ${failed.map(result => result.id).join(', ')}`), { results });
-  const prs = results.filter(result => result.result === 'merged').length;
-  onOutput(`Done. ${prs} ${prs === 1 ? 'pull request' : 'pull requests'} merged, ${results.filter(result => result.result === 'current').length} already current.\n`);
+  const prs = results.filter(result => result.result === 'merged').length, commits = results.filter(result => result.result === 'committed').length;
+  onOutput(`Done. ${prs} ${prs === 1 ? 'pull request' : 'pull requests'} merged, ${commits ? `${commits} local ${commits === 1 ? 'folder' : 'folders'} committed, ` : ''}${results.filter(result => result.result === 'current').length} already current.\n`);
   return results;
 }
 
 // Locks or unlocks one skill in one repository: edits .agents/skill-locks.json in a temporary worktree
 // on origin/main and merges it through a pull request, the same way a sync does. The skip list and
 // GitHub's archived flag are checked here too. Returns { id, result: 'merged' | 'current', url? }.
-export async function setSkillLock({ root, id, skill, lock, reason: why = '', execute = run, skip, onOutput = () => {} }) {
+// A local folder commits the change to its local main instead.
+export async function setSkillLock({ root, id, skill, lock, reason: why = '', execute = run, skip, local = [], onOutput = () => {} }) {
   const say = text => onOutput(`${id}: ${text}\n`);
   const skipList = skip ?? await readSkipList();
-  const clone = (await findClones({ root, execute })).find(item => item.id === id);
+  const clone = [...await findClones({ root, execute }), ...await localClones({ root, local, execute })].find(item => item.id === id);
   if (!clone) throw new Error('No clone in the CoreWise folder.');
-  const github = await githubState(id, execute);
-  const listed = skipReason(skipList, id) ?? (github.name ? skipReason(skipList, github.name) : null);
-  if (listed !== null) throw new Error(`Skipped: ${listed}. Nothing was written.`);
-  if (github.skipped) throw new Error(`Skipped: ${github.skipped}. Nothing was written.`);
-  if (github.blocked) throw new Error(github.blocked);
-  await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
-  const head = (await execute('git', ['-C', clone.folder, 'rev-parse', 'origin/main'])).trim();
+  if (clone.problem) throw new Error(clone.problem);
+  let github = null, head;
+  if (clone.local) {
+    const listed = skipReason(skipList, id);
+    if (listed !== null) throw new Error(`Skipped: ${listed}. Nothing was written.`);
+    head = await localMain(clone.folder, execute);
+  } else {
+    github = await githubState(id, execute);
+    const listed = skipReason(skipList, id) ?? (github.name ? skipReason(skipList, github.name) : null);
+    if (listed !== null) throw new Error(`Skipped: ${listed}. Nothing was written.`);
+    if (github.skipped) throw new Error(`Skipped: ${github.skipped}. Nothing was written.`);
+    if (github.blocked) throw new Error(github.blocked);
+    await execute('git', ['-C', clone.folder, ...GIT_CRED, 'fetch', '--quiet', 'origin', 'main']);
+    head = (await execute('git', ['-C', clone.folder, 'rev-parse', 'origin/main'])).trim();
+  }
   const temp = await realpath(await mkdtemp(path.join(tmpdir(), 'corewise-lock-')));
   const worktree = path.join(temp, 'work');
   const git = args => execute('git', ['-C', worktree, ...args]);
@@ -761,6 +840,11 @@ export async function setSkillLock({ root, id, skill, lock, reason: why = '', ex
     const detail = lock ? `Harness Console skill sync leaves ${skill} as it is in this repository${why ? `: ${why}` : ''}.` : `Harness Console skill sync can update ${skill} again.`;
     await git(['commit', '-q', '-m', title, '-m', detail]);
     const commit = (await git(['rev-parse', 'HEAD'])).trim();
+    if (clone.local) {
+      await landLocal({ folder: clone.folder, head, commit, execute });
+      say(`committed ${commit.slice(0, 7)} to local main (${lock ? 'locked' : 'unlocked'} ${skill})`);
+      return { id, result: 'committed', commit };
+    }
     const { branch, url } = await mergeCommit({ git, execute, worktree, github, commit, base: `harness-lock/${skill}`, title, body: `${detail}\n\nThe list is ${LOCKS}.\n\nOpened by Harness Console skill sync.`, say });
     say(`merged ${url} (${lock ? 'locked' : 'unlocked'} ${skill})`);
     return { id, result: 'merged', commit, branch, url };

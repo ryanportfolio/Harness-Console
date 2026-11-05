@@ -248,12 +248,30 @@ const SYNC_GROUPS = [
 const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 async function scanSync() {
   if (sync.scanning) return;
-  sync.scanned = true; sync.scanning = true; sync.armed = false; renderSyncFoot();
+  sync.scanned = true; sync.scanning = true; sync.armed = false; renderSyncFoot(); void loadSyncLocal();
   $('syncScan').disabled = true; $('syncScan').firstChild.textContent = 'Checking repositories ';
   try { sync.data = await api('sync'); $('syncTemplate').textContent = `Harness-Firmware main ${sync.data.template.head.slice(0, 7)}`; renderSync(); }
   catch (error) { sync.data = null; $('syncTools').hidden = true; const p = document.createElement('p'); p.className = 'sync-current'; p.textContent = error.message; $('syncRepos').replaceChildren(p); }
   finally { sync.scanning = false; $('syncScan').disabled = busy; $('syncScan').firstChild.textContent = 'Check repositories '; renderSyncFoot(); }
 }
+// Local folders: Git folders in the workspace without a GitHub origin, added to Skill sync one by one.
+// A sync commits to their local main instead of opening a pull request.
+async function loadSyncLocal() {
+  let data; try { data = await api('sync/local'); } catch { $('syncLocal').hidden = true; return; }
+  const items = data.folders.map(name => {
+    const button = el('button', 'quiet', 'Remove'); button.type = 'button'; button.setAttribute('aria-label', `Remove ${name} from skill sync`);
+    button.onclick = () => void changeSyncLocal(name, false); return el('span', '', name, button);
+  });
+  $('syncLocalList').replaceChildren(...(items.length ? items : [el('span', '', 'None added')]));
+  $('syncLocalSelect').replaceChildren(...data.candidates.map(name => { const option = el('option', '', name); option.value = name; return option; }));
+  $('syncLocalPick').hidden = !data.candidates.length;
+  $('syncLocal').hidden = !data.folders.length && !data.candidates.length;
+}
+async function changeSyncLocal(folder, add) {
+  try { await api('sync-local', { folder, add }); } catch (error) { showSyncError('Local folder needs attention', error.message); return; }
+  await loadSyncLocal(); if (!sync.scanning) void scanSync();
+}
+$('syncLocalAdd').onclick = () => { const folder = $('syncLocalSelect').value; if (folder) void changeSyncLocal(folder, true); };
 const repoBoxes = id => [...$('syncRepos').querySelectorAll(`input[data-repo="${CSS.escape(id)}"][data-action="apply"]`)];
 function syncRepoToggle(id) {
   const toggle = $('syncRepos').querySelector(`input[data-toggle="${CSS.escape(id)}"]`); if (!toggle) return;
@@ -405,8 +423,9 @@ $('syncCompareClose').onclick = () => $('syncCompare').close();
 // skill is never offered again until it is unlocked, so Select all cannot pick it.
 async function changeLock(repo, skill, lock) {
   let reason = '';
-  if (lock) { const answer = prompt(`Lock ${skill.name} in ${repo.name}? Skill sync will leave it as it is, including Select all. This merges a change to .agents/skill-locks.json on GitHub.\n\nReason (optional):`, ''); if (answer === null) return; reason = answer.trim().slice(0, 300); }
-  else if (!confirm(`Unlock ${skill.name} in ${repo.name}? Skill sync can update it again. This merges a change to .agents/skill-locks.json on GitHub.`)) return;
+  const where = repo.local ? 'commits a change to .agents/skill-locks.json to local main' : 'merges a change to .agents/skill-locks.json on GitHub';
+  if (lock) { const answer = prompt(`Lock ${skill.name} in ${repo.name}? Skill sync will leave it as it is, including Select all. This ${where}.\n\nReason (optional):`, ''); if (answer === null) return; reason = answer.trim().slice(0, 300); }
+  else if (!confirm(`Unlock ${skill.name} in ${repo.name}? Skill sync can update it again. This ${where}.`)) return;
   try { await api('sync-lock', { id: repo.id, skill: skill.name, lock, reason }); acceptedSyncJob(); await poll(); }
   catch (error) { showSyncError('Lock needs attention', error.message); }
 }
@@ -440,7 +459,7 @@ function syncRepoBlock(repo) {
   const head = document.createElement('div'); head.className = 'sync-repo-head';
   const title = document.createElement('h2'); title.textContent = repo.name;
   const id = document.createElement('a'); id.className = 'pill'; id.textContent = repo.id; id.href = 'https://github.com/' + repo.id.split('/').map(encodeURIComponent).join('/'); id.target = '_blank'; id.rel = 'noopener noreferrer'; id.setAttribute('aria-label', `Open ${repo.id} on GitHub (new tab)`);
-  head.append(title, id);
+  head.append(title, repo.local ? el('span', 'pill', 'Local folder, commits to main') : id);
   const tally = (status, codex) => repo.skills.filter(hasStatus(status, codex)).length;
   if (tally('behind') + tally('new')) {
     const toggle = document.createElement('label'); toggle.className = 'sync-toggle'; const box = document.createElement('input'); box.type = 'checkbox'; box.dataset.toggle = repo.id;
@@ -528,8 +547,10 @@ function prLink(item, text) {
 // Left: one item per repository, failures first, then the running one, the waiting ones and the finished ones.
 // Right: the picked repository in full. A row without a result is waiting, or running while it names a step;
 // after the job ends it was never run.
-const SYNC_ROW = { failed: ['Failed', 0], running: ['Running', 1], waiting: ['Waiting', 2], skipped: ['Not run', 3], merged: ['Merged', 4], current: ['Already current', 5] };
+const SYNC_ROW = { failed: ['Failed', 0], running: ['Running', 1], waiting: ['Waiting', 2], skipped: ['Not run', 3], merged: ['Merged', 4], committed: ['Committed', 4], current: ['Already current', 5] };
 const SYNC_STEPS = ['Checking GitHub', 'Fetching main', 'Writing skills', 'Running checks', 'Committing', 'Pushing', 'Opening pull request', 'Merging'];
+// A local folder has no GitHub side: its sync commits in a temporary checkout and fast-forwards local main.
+const LOCAL_STEPS = ['Reading main', 'Writing skills', 'Running checks', 'Committing', 'Updating main'];
 // lock: the job locks or unlocks one skill instead of syncing skills.
 const syncView = { rows: [], done: false, log: '', lock: false, pick: null, keys: {}, copied: null, rejected: false };
 const syncState = row => row.result ?? (syncView.done ? 'skipped' : row.step ? 'running' : 'waiting');
@@ -581,15 +602,15 @@ function redraw(container, children) {
 function renderSyncRows(rows, done, log, lock) {
   syncView.rows = rows; syncView.done = done; syncView.log = log; syncView.lock = lock;
   drawSync();
-  return { failed: rows.filter(row => row.result === 'failed').length, succeeded: rows.filter(row => row.result === 'merged' || row.result === 'current').length };
+  return { failed: rows.filter(row => row.result === 'failed').length, succeeded: rows.filter(row => ['merged', 'committed', 'current'].includes(row.result)).length };
 }
 function drawSync() {
   const { rows, done } = syncView;
-  const tally = { merged: 0, current: 0, failed: 0 };
+  const tally = { merged: 0, committed: 0, current: 0, failed: 0 };
   for (const row of rows) if (row.result in tally) tally[row.result]++;
-  const finished = tally.merged + tally.current + tally.failed;
+  const finished = tally.merged + tally.committed + tally.current + tally.failed;
   $('syncMeter').hidden = !rows.length || rows.length < 2 && done;
-  $('syncBarDone').style.width = `${rows.length ? (tally.merged + tally.current) / rows.length * 100 : 0}%`;
+  $('syncBarDone').style.width = `${rows.length ? (tally.merged + tally.committed + tally.current) / rows.length * 100 : 0}%`;
   $('syncBarFailed').style.width = `${rows.length ? tally.failed / rows.length * 100 : 0}%`;
   const sorted = rows.map((row, index) => ({ row, index })).sort((a, b) => SYNC_ROW[syncState(a.row)][1] - SYNC_ROW[syncState(b.row)][1] || a.index - b.index).map(({ row }) => row);
   // The reader's pick stays; without one, the first failure, else the running repository, else the first.
@@ -599,10 +620,10 @@ function drawSync() {
   const changed = (part, value) => { const key = JSON.stringify(value); if (syncView.keys[part] === key) return false; syncView.keys[part] = key; return true; };
   if (changed('tally', [tally, rows.length])) {
     redraw($('syncTally'), [`${finished} of ${count(rows.length, 'repository', 'repositories')} done`,
-      ...[[tally.merged, 'merged'], [tally.current, 'already current'], [tally.failed, 'failed']].filter(([n]) => n).map(([n, label]) => el('span', label === 'failed' ? 'bad' : '', `${n} ${label}`)),
+      ...[[tally.merged, 'merged'], [tally.committed, 'committed locally'], [tally.current, 'already current'], [tally.failed, 'failed']].filter(([n]) => n).map(([n, label]) => el('span', label === 'failed' ? 'bad' : '', `${n} ${label}`)),
       tally.failed ? copyButton('all', tally.failed > 1 ? `Copy all ${tally.failed} failures` : 'Copy failure') : null].filter(Boolean));
   }
-  const line = row => ({ failed: row.error || 'Failed; see the full log.', running: `${row.step}…`, waiting: row.skills ? count(row.skills, 'skill', 'skills') : '', skipped: 'Not started', merged: row.url ? `#${row.url.split('/').pop()}` : '', current: '' })[syncState(row)];
+  const line = row => ({ failed: row.error || 'Failed; see the full log.', running: `${row.step}…`, waiting: row.skills ? count(row.skills, 'skill', 'skills') : '', skipped: 'Not started', merged: row.url ? `#${row.url.split('/').pop()}` : '', committed: row.commit ? row.commit.slice(0, 7) : '', current: '' })[syncState(row)];
   if (changed('list', [sorted.map(row => [row.id, syncState(row), line(row)]), picked?.id])) {
     redraw($('syncList'), sorted.map(row => {
       // A button per repository, so a screen reader announces it as one to press; aria-current marks the picked one.
@@ -626,11 +647,11 @@ function syncDetail(row) {
   const state = syncState(row), failed = state === 'failed';
   // Each step lasts until the next one starts; the last until the result, or until now while it runs.
   const times = new Map((row.steps ?? []).map((step, index, all) => [step.name, (all[index + 1]?.at ?? row.endedAt ?? Date.now()) - step.at]));
-  const steps = SYNC_STEPS.map(name => {
+  const steps = (row.local ? LOCAL_STEPS : SYNC_STEPS).map(name => {
     const mark = failed && name === row.failedAt ? 'bad' : row.step === name ? 'now' : times.has(name) ? 'ok' : 'off';
     return el('li', `step ${mark}`, el('span', 'mark', ''), el('span', '', name), el('span', 'time', times.has(name) ? elapsed(times.get(name)) : mark === 'off' && row.result ? 'Skipped' : ''));
   });
-  const where = failed ? [row.failedAt && `Failed at: ${row.failedAt}`, row.url ? null : row.branch ? `Branch ${row.branch} is on GitHub` : 'No pull request opened'].filter(Boolean).join(' · ') : '';
+  const where = failed ? [row.failedAt && `Failed at: ${row.failedAt}`, row.local ? 'main was not changed' : row.url ? null : row.branch ? `Branch ${row.branch} is on GitHub` : 'No pull request opened'].filter(Boolean).join(' · ') : '';
   const lines = repoLog(row.id);
   return [
     el('div', 'detail-head', el('h3', '', row.id), el('span', `state ${state}`, SYNC_ROW[state][0])),
@@ -638,6 +659,7 @@ function syncDetail(row) {
     failed ? el('p', 'where', where, row.url && where ? ' · ' : '', prLink(row, `Open pull request #${row.url?.split('/').pop()}`)) : null,
     failed ? el('p', 'copy-line', copyButton(row.id, 'Copy for AI'), el('span', '', 'Copies the repository, step, error, pull request and its log lines.')) : null,
     state === 'merged' ? el('p', 'where', 'Merged in ', prLink(row) ?? 'a pull request', row.skills ? ` · ${count(row.skills, 'skill', 'skills')}` : '') : null,
+    state === 'committed' ? el('p', 'where', `Committed ${row.commit?.slice(0, 7) ?? ''} to local main`, row.skills ? ` · ${count(row.skills, 'skill', 'skills')}` : '') : null,
     state === 'current' ? el('p', 'where', syncView.lock ? 'Nothing to change; the lock list on main already says this.' : 'Nothing to change; main already has these skills.') : null,
     state === 'waiting' ? el('p', 'where', `Waiting for the repositories before it${row.skills ? ` · ${count(row.skills, 'skill', 'skills')}` : ''}.`) : null,
     state === 'skipped' ? el('p', 'where', 'The sync stopped before this repository; nothing was written.') : null,
