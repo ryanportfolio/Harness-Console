@@ -229,7 +229,13 @@ async function localClone({ root, name, execute }) {
   if (githubId(await execute('git', ['-C', folder, 'config', '--get', 'remote.origin.url']).catch(() => ''))) return { ...clone, problem: 'Its origin is on GitHub now, so it is synced as a GitHub clone; remove it from local folders.' };
   return clone;
 }
-const localClones = ({ root, local = [], execute }) => Promise.all([...new Set(local)].map(name => localClone({ root, name, execute })));
+// GitHub clones first, then local folders. A GitHub owner can be named "local", so a local folder whose
+// id matches a GitHub clone's gets a problem, and every lookup by id finds the GitHub clone.
+async function allClones({ root, local = [], execute }) {
+  const clones = await findClones({ root, execute }), taken = new Set(clones.map(clone => clone.id.toLowerCase()));
+  const locals = await Promise.all([...new Set(local)].map(name => localClone({ root, name, execute })));
+  return [...clones, ...locals.map(clone => taken.has(clone.id.toLowerCase()) ? { ...clone, problem: `The GitHub repository ${clone.id} is cloned here too, so this local folder cannot be told apart from it; remove it from local folders.` } : clone)];
+}
 // The folders the tab can add: Git folders directly under root whose origin is missing or not on GitHub.
 export async function localCandidates({ root, execute = run }) {
   const found = [];
@@ -259,7 +265,8 @@ async function landLocal({ folder, head, commit, execute, step = () => {} }) {
   if (!checkout) { await execute('git', ['-C', folder, 'update-ref', '-m', 'Harness Console skill sync', 'refs/heads/main', commit, head]); return; }
   if (await localMain(folder, execute) !== head) throw new Error('main moved since the sync started; check repositories again. main was not changed.');
   if ((await execute('git', ['-C', checkout, 'status', '--porcelain', '--untracked-files=no'])).trim()) throw new Error(`main is checked out in ${checkout} with uncommitted changes; commit or stash them and sync again. main was not changed.`);
-  await execute('git', ['-C', checkout, 'merge', '--ff-only', '--quiet', commit]);
+  // Git overwrites ignored files on a merge by default; an ignored file in the way was never previewed.
+  await execute('git', ['-C', checkout, 'merge', '--ff-only', '--no-overwrite-ignore', '--quiet', commit]);
 }
 
 // A template without this part of the skill counts as empty, so every local file shows as added.
@@ -361,7 +368,7 @@ async function limit(items, size, work) {
 export async function scanSkills({ root, execute = run, template: opened, cache, source, skip, local = [] } = {}) {
   const skipList = skip ?? await readSkipList();
   const template = opened ?? await openTemplate({ cache, source, execute });
-  const clones = [...await findClones({ root, execute }), ...await localClones({ root, local, execute })];
+  const clones = await allClones({ root, local, execute });
   const repos = await limit(clones, 6, async ({ problem, ...clone }) => {
     const listed = skipReason(skipList, clone.id);
     if (listed !== null) return { ...clone, harness: true, skipped: listed };
@@ -780,7 +787,8 @@ async function removeWorktree(folder, temp, worktree, execute, say) {
 export async function applySkills({ root, selection, execute = run, template: opened, cache, source, skip, local = [], onOutput = () => {}, onProgress = () => {} }) {
   const skipList = skip ?? await readSkipList();
   const template = opened ?? await openTemplate({ cache, source, execute, onOutput });
-  const clones = new Map([...await findClones({ root, execute }), ...await localClones({ root, local, execute })].map(clone => [clone.id, clone]));
+  // Reversed, so the GitHub clone wins where a local folder shares its id.
+  const clones = new Map((await allClones({ root, local, execute })).reverse().map(clone => [clone.id, clone]));
   const results = [];
   const done = result => { results.push(result); onProgress(result.id, result); };
   for (const { id, apply = [], remove = [], replace = [] } of selection) {
@@ -805,7 +813,7 @@ export async function applySkills({ root, selection, execute = run, template: op
 export async function setSkillLock({ root, id, skill, lock, reason: why = '', execute = run, skip, local = [], onOutput = () => {} }) {
   const say = text => onOutput(`${id}: ${text}\n`);
   const skipList = skip ?? await readSkipList();
-  const clone = [...await findClones({ root, execute }), ...await localClones({ root, local, execute })].find(item => item.id === id);
+  const clone = (await allClones({ root, local, execute })).find(item => item.id === id);
   if (!clone) throw new Error('No clone in the CoreWise folder.');
   if (clone.problem) throw new Error(clone.problem);
   let github = null, head;

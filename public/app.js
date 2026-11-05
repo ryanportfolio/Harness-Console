@@ -252,7 +252,7 @@ async function scanSync() {
   $('syncScan').disabled = true; $('syncScan').firstChild.textContent = 'Checking repositories ';
   try { sync.data = await api('sync'); $('syncTemplate').textContent = `Harness-Firmware main ${sync.data.template.head.slice(0, 7)}`; renderSync(); }
   catch (error) { sync.data = null; $('syncTools').hidden = true; const p = document.createElement('p'); p.className = 'sync-current'; p.textContent = error.message; $('syncRepos').replaceChildren(p); }
-  finally { sync.scanning = false; $('syncScan').disabled = busy; $('syncScan').firstChild.textContent = 'Check repositories '; renderSyncFoot(); }
+  finally { sync.scanning = false; $('syncScan').disabled = busy; $('syncScan').firstChild.textContent = 'Check repositories '; renderSyncFoot(); if (sync.rescan) { sync.rescan = false; void scanSync(); } }
 }
 // Local folders: Git folders in the workspace without a GitHub origin, added to Skill sync one by one.
 // A sync commits to their local main instead of opening a pull request.
@@ -269,7 +269,8 @@ async function loadSyncLocal() {
 }
 async function changeSyncLocal(folder, add) {
   try { await api('sync-local', { folder, add }); } catch (error) { showSyncError('Local folder needs attention', error.message); return; }
-  await loadSyncLocal(); if (!sync.scanning) void scanSync();
+  // A scan already running read the old list, so another one follows it.
+  await loadSyncLocal(); if (sync.scanning) sync.rescan = true; else void scanSync();
 }
 $('syncLocalAdd').onclick = () => { const folder = $('syncLocalSelect').value; if (folder) void changeSyncLocal(folder, true); };
 const repoBoxes = id => [...$('syncRepos').querySelectorAll(`input[data-repo="${CSS.escape(id)}"][data-action="apply"]`)];
