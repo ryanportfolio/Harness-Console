@@ -10,6 +10,8 @@ import { readSkipList, SKIP_FILE } from './sync.mjs';
 //   defaultTemplate  owner/name of the template new projects start from
 //   projects         { "owner/name": { paused: "reason" } }: a paused project is never written by a sync
 //   lastSelected     owner/name of the repository last cloned, or null
+//   localFolders     optional; names of folders directly in the workspace that Skill sync lists although
+//                    they have no GitHub origin. A sync commits to their local main instead of opening a pull request.
 export const APP_NAME = 'Harness Firmware';
 
 export function settingsDir({ platform = process.platform, env = process.env, home = homedir() } = {}) {
@@ -24,6 +26,8 @@ export const settingsFile = options => path.join(settingsDir(options), 'settings
 export const legacyPaths = ({ home = homedir() } = {}) => ({ dir: path.join(home, '.corewise-cloner'), preferences: path.join(home, '.corewise-cloner', 'preferences.json'), root: path.join(home, 'CoreWise'), skip: SKIP_FILE });
 
 const REPO = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
+// The characters validateLeaf (core.mjs) allows, so a local folder's id local/<name> passes validateRepo.
+export const LOCAL_FOLDER = /^[A-Za-z0-9_.-]{1,100}$/;
 export const defaults = () => ({ version: 1, workspace: null, defaultTemplate: TEMPLATE, projects: {}, lastSelected: null });
 
 export function validateSettings(data, label = 'settings') {
@@ -38,6 +42,7 @@ export function validateSettings(data, label = 'settings') {
     if (project.paused !== undefined && typeof project.paused !== 'string') fail(`project ${id}: "paused" must be a reason, or left out`);
   }
   if (data.lastSelected !== null && (typeof data.lastSelected !== 'string' || !REPO.test(data.lastSelected))) fail('"lastSelected" must be owner/name or null');
+  if (data.localFolders !== undefined && (!Array.isArray(data.localFolders) || data.localFolders.some(name => typeof name !== 'string' || !LOCAL_FOLDER.test(name) || /^\.+$/.test(name)))) fail('"localFolders" must be a list of folder names in the workspace');
   return data;
 }
 
@@ -88,6 +93,8 @@ export async function loadSettings({ file = settingsFile(), legacy = legacyPaths
   await saveSettings(file, settings);
   return { settings, migrated };
 }
+
+export const localFolders = settings => [...new Set(settings.localFolders ?? [])];
 
 // The paused projects as the skip list sync.mjs reads: [{ repo, reason }]. A pause with no reason
 // still pauses; skipReason tells "not listed" (null) apart from any reason.

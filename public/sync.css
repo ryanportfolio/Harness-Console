@@ -2,6 +2,9 @@
 #syncView,#dshView{display:block;margin-top:40px;max-width:1432px}
 .sync-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap;margin-bottom:30px}
 .sync-tools{display:flex;gap:26px;flex-wrap:wrap;margin:0 0 20px}
+.sync-local{display:flex;align-items:center;gap:12px 26px;flex-wrap:wrap;margin:-10px 0 30px;font-size:14px}.sync-local-label{letter-spacing:.06em;text-transform:uppercase;color:var(--bronze)}
+.sync-local-list{display:flex;gap:12px 20px;flex-wrap:wrap}.sync-local-list>span{display:inline-flex;gap:8px;align-items:baseline}
+.sync-local-pick{display:inline-flex;gap:14px;align-items:center}.sync-local select{font:inherit;color:inherit;background:transparent;border:1px solid var(--ink);padding:4px 6px}
 .sync-repo{border-top:1px solid var(--ink);padding:20px 0 24px}
 .sync-repo-head{display:flex;align-items:baseline;gap:20px;flex-wrap:wrap}.sync-repo-head h2{font-size:24px}.sync-repo-head .pill{margin-right:auto}
 .sync-counts{font-size:14px;color:var(--bronze);margin:6px 0 0}

@@ -99,7 +99,7 @@ test('the server takes its workspace and paused projects from the settings file'
   assert.equal(state.root, workspace);
   assert.equal(state.settingsError, null);
   assert.equal((await call('sync')).status, 200);
-  assert.deepEqual(seen, [{ root: workspace, skip: [{ repo: 'owner/frozen', reason: 'Frozen job take-home' }] }]);
+  assert.deepEqual(seen, [{ root: workspace, skip: [{ repo: 'owner/frozen', reason: 'Frozen job take-home' }], local: [] }]);
 });
 
 test('a broken settings file refuses every sync and lock and is never overwritten', async t => {

@@ -6,15 +6,15 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { cloneMain, github, localState, updateMain, validateRepo } from './core.mjs';
 import { createProject, skillCatalog } from './harness.mjs';
-import { applySkills, compareSkill, normalizeLock, normalizeSelection, scanSkills, setSkillLock, skillStory } from './sync.mjs';
+import { applySkills, compareSkill, localCandidates, normalizeLock, normalizeSelection, scanSkills, setSkillLock, skillStory } from './sync.mjs';
 import { compareDsh, installDsh, normalizeChoices, previewDsh } from './dsh.mjs';
 import { TRACKER } from './launcher.mjs';
-import { defaults, legacyPaths, loadSettings, pausedList, readSettings, settingsFile as defaultSettingsFile, updateSettings } from './settings.mjs';
+import { defaults, legacyPaths, loadSettings, LOCAL_FOLDER, localFolders, pausedList, readSettings, settingsFile as defaultSettingsFile, updateSettings } from './settings.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/new-project.css': ['new-project.css', 'text/css'], '/sync.css': ['sync.css', 'text/css'] };
 // settingsFile null keeps settings in memory only (tests); root, when given, overrides the workspace.
-export async function createApp({ root: rootOverride = null, settingsFile = defaultSettingsFile(), legacy = legacyPaths(), adapter = github(), clone = cloneMain, update = updateMain, local = localState, create = createProject, catalog = skillCatalog, scan = scanSkills, sync = applySkills, lockSkill = setSkillLock, compareSync = compareSkill, storySync = skillStory, dshPreview = previewDsh, dshInstall = installDsh, dshCompare = compareDsh, build = null } = {}) {
+export async function createApp({ root: rootOverride = null, settingsFile = defaultSettingsFile(), legacy = legacyPaths(), adapter = github(), clone = cloneMain, update = updateMain, local = localState, create = createProject, catalog = skillCatalog, scan = scanSkills, candidates = localCandidates, sync = applySkills, lockSkill = setSkillLock, compareSync = compareSkill, storySync = skillStory, dshPreview = previewDsh, dshInstall = installDsh, dshCompare = compareDsh, build = null } = {}) {
   const token = randomBytes(32).toString('hex');
   let repos = [], job = null, skills = null, lastScan = null, lastDsh = null;
   // A settings file that cannot be read leaves the app usable but refuses every sync and lock, because
@@ -32,6 +32,13 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
     if (settingsError) throw new Error(settingsError);
     if (!settingsFile) return pausedList(settings);
     try { return pausedList(await readSettings(settingsFile)); }
+    catch (error) { throw new Error(`Could not read the settings file. ${error.message}`); }
+  };
+  // Local folders added to Skill sync, read from the file each time like the paused projects.
+  const locals = async () => {
+    if (settingsError) throw new Error(settingsError);
+    if (!settingsFile) return localFolders(settings);
+    try { return localFolders(await readSettings(settingsFile)); }
     catch (error) { throw new Error(`Could not read the settings file. ${error.message}`); }
   };
   // DSH installs read the local Harness-Firmware checkout; the preview keeps the rendered bytes,
@@ -71,8 +78,12 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
         catch (error) { return reply(res, 502, { error: `Could not read the template's skills. ${error.message}` }); }
       }
       if (req.method === 'GET' && url.pathname === '/api/sync') {
-        try { lastScan = await scan({ root: needRoot(), skip: await paused() }); return reply(res, 200, lastScan); }
+        try { lastScan = await scan({ root: needRoot(), skip: await paused(), local: await locals() }); return reply(res, 200, lastScan); }
         catch (error) { return reply(res, 502, { error: `Could not compare skills. ${error.message}` }); }
+      }
+      if (req.method === 'GET' && url.pathname === '/api/sync/local') {
+        try { const folders = await locals(); return reply(res, 200, { folders, candidates: (await candidates({ root: needRoot() })).filter(name => !folders.includes(name)) }); }
+        catch (error) { return reply(res, 502, { error: `Could not list local folders. ${error.message}` }); }
       }
       if (req.method === 'GET' && url.pathname === '/api/sync/compare') {
         // Compares the exact commits the page was shown: the scanned origin/main and template head.
@@ -110,11 +121,22 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
         server.close();
         return;
       }
+      // Adds or removes one local folder in the settings file; nothing in the folder changes. Only a folder
+      // the tab can offer (a Git folder in the workspace without a GitHub origin) can be added.
+      if (url.pathname === '/api/sync-local') {
+        if (typeof body.folder !== 'string' || !LOCAL_FOLDER.test(body.folder) || /^\.+$/.test(body.folder) || typeof body.add !== 'boolean') throw new Error('Choose a folder in the workspace.');
+        const folders = await locals();
+        if (body.add && !folders.includes(body.folder) && !(await candidates({ root: needRoot() })).includes(body.folder)) throw new Error(`${body.folder} is not a Git folder without a GitHub origin in the workspace.`);
+        const next = body.add ? [...new Set([...folders, body.folder])] : folders.filter(name => name !== body.folder);
+        if (settingsFile) settings = await updateSettings(settingsFile, { localFolders: next }); else settings = { ...settings, localFolders: next };
+        return reply(res, 200, { folders: next });
+      }
       if (!['/api/clone', '/api/update', '/api/login', '/api/create', '/api/sync', '/api/sync-lock', '/api/dsh'].includes(url.pathname)) return reply(res, 404, { error: 'Not found.' });
       if (job?.status === 'running') return reply(res, 409, { error: 'An operation is already running.' });
       const kind = url.pathname.slice('/api/'.length);
       if (['clone', 'update', 'create', 'sync', 'sync-lock'].includes(kind)) needRoot();
       const skip = ['sync', 'sync-lock'].includes(kind) ? await paused() : null;
+      const localList = ['sync', 'sync-lock'].includes(kind) ? await locals() : null;
       if (kind === 'clone' || kind === 'update') { validateRepo(body.id); if (!repos.some(repo => repo.id === body.id)) throw new Error('Refresh and select a repository from your account.'); }
       let request = null;
       if (kind === 'dsh') {
@@ -160,18 +182,19 @@ export async function createApp({ root: rootOverride = null, settingsFile = defa
             catch (error) { active.results = error.results ?? null; throw error; }
           } else if (kind === 'sync-lock') {
             // A pull request that opened but did not merge keeps its link, as a failed sync does.
-            try { active.results = [await lockSkill({ root, ...request, skip, onOutput: output })]; }
+            try { active.results = [await lockSkill({ root, ...request, skip, local: localList, onOutput: output })]; }
             catch (error) { active.results = error.branch ? [{ id: request.id, result: 'failed', error: error.message, branch: error.branch, ...(error.url && { url: error.url }) }] : null; throw error; }
           } else if (kind === 'sync') {
             // One row per picked repository; a row without a result is still waiting or running.
             // A failed row keeps the step it failed in as `failedAt`. `steps` and `endedAt` are epoch ms, for step times.
-            active.progress = request.map(item => ({ id: item.id, skills: item.apply.length + item.remove.length + item.replace.length, step: null, steps: [], result: null }));
+            // local marks a local folder, whose steps end in a local commit instead of a pull request.
+            active.progress = request.map(item => ({ id: item.id, local: Boolean(lastScan.repos.find(repo => repo.id === item.id)?.local), skills: item.apply.length + item.remove.length + item.replace.length, step: null, steps: [], result: null }));
             const onProgress = (id, update) => {
               const row = active.progress.find(entry => entry.id === id); if (!row) return;
               if (update.result) Object.assign(row, update, { step: null, endedAt: Date.now() }, update.result === 'failed' && row.step ? { failedAt: row.step } : {});
               else { row.step = update.step; row.steps.push({ name: update.step, at: Date.now() }); }
             };
-            try { active.results = await sync({ root, selection: request, skip, onOutput: output, onProgress }); }
+            try { active.results = await sync({ root, selection: request, skip, local: localList, onOutput: output, onProgress }); }
             catch (error) { active.results = error.results ?? null; throw error; }
           } else if (kind === 'create') {
             const result = await create({ root, ...request, catalog: await loadSkills(), onOutput: output });
